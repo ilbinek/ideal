@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Startup Command - Arma 3 Mod Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        function copyCommand() {
+            let command = document.getElementById('startup-command').innerText;
+            navigator.clipboard.writeText(command).then(() => {
+                alert('Command copied to clipboard!');
+            });
+        }
+    </script>
+</head>
+<body>
+    <nav>
+        <h1>Arma 3 Mod Manager</h1>
+        <ul>
+            <li><a href="/">Home</a></li>
+            <li><a href="/settings">Settings</a></li>
+            <li><a href="/modsets">Modsets</a></li>
+            <li><a href="/mods">Mods</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <h2>Server Startup Command</h2>
+        
+        <div class="command-box">
+            <h3>Mod Parameter:</h3>
+            <pre id="startup-command">{{.Command}}</pre>
+            <button onclick="copyCommand()" class="button">Copy Command</button>
+        </div>
+
+        <div class="info-box">
+            <h3>Keys Directory:</h3>
+            <p><strong>{{.KeysPath}}</strong></p>
+            <p>Copy all .bikey files from this directory to your Arma 3 server's <code>keys/</code> folder.</p>
+        </div>
+
+        <h3>Mod Paths:</h3>
+        <ul>
+            {{range .ModPaths}}
+            <li><code>{{.}}</code></li>
+            {{end}}
+        </ul>
+
+        <div class="info-box">
+            <h3>Full Server Start Command Example:</h3>
+            <pre>./arma3server -config=server.cfg {{.Command}}</pre>
+        </div>
+    </div>
+</body>
+</html>

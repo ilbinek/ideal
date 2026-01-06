@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mods - Arma 3 Mod Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .download-cell {
+            position: relative;
+            min-width: 350px;
+        }
+
+        .progress-container {
+            margin-top: 12px;
+            padding: 16px;
+            background: linear-gradient(135deg, #2a2a2a 0%, #1f1f1f 100%);
+            border-radius: 8px;
+            border: 1px solid #3a3a3a;
+            display: none;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .progress-container.active {
+            display: block;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .progress-message {
+            font-size: 13px;
+            color: #6ab7ff;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .progress-percentage {
+            font-size: 14px;
+            color: #4a9eff;
+            font-weight: 600;
+            min-width: 60px;
+            text-align: right;
+        }
+
+        .progress-bar-outer {
+            width: 100%;
+            height: 8px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 8px 0;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+        }
+
+        .progress-bar-inner {
+            height: 100%;
+            background: linear-gradient(90deg, #4a9eff 0%, #6ab7ff 100%);
+            border-radius: 4px;
+            width: 0%;
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 0 10px rgba(74, 158, 255, 0.5);
+        }
+
+        .progress-bar-inner.complete {
+            background: linear-gradient(90deg, #4caf50 0%, #66bb6a 100%);
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+
+        .progress-bar-inner.error {
+            background: linear-gradient(90deg, #e74c3c 0%, #ff6b6b 100%);
+            box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
+        }
+
+        .progress-file-container {
+            min-height: 20px;
+            margin-top: 8px;
+        }
+
+        .progress-file {
+            font-size: 11px;
+            color: #999;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: block;
+        }
+
+        .progress-spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border: 2px solid #3a3a3a;
+            border-top-color: #4a9eff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .download-button {
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .download-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    </style>
+    <script>
+        let activeEventSource = null;
+        let isDownloadingAll = false;
+        let downloadQueue = [];
+
+        function checkUpdates() {
+            document.getElementById('update-status').innerText = 'Checking for updates...';
+            
+            fetch('/mods/check-updates')
+                .then(response => response.json())
+                .then(data => {
+                    let count = 0;
+                    for (let id in data) {
+                        if (data[id]) {
+                            count++;
+                            let row = document.querySelector('tr[data-mod-id="' + id + '"]');
+                            if (row) {
+                                row.classList.add('update-available');
+                            }
+                        }
+                    }
+                    document.getElementById('update-status').innerText = 
+                        'Update check complete. ' + count + ' update(s) available.';
+                    location.reload();
+                })
+                .catch(error => {
+                    document.getElementById('update-status').innerText = 'Error checking updates.';
+                    console.error('Error:', error);
+                });
+        }
+
+        function downloadMod(id) {
+            let button = event.target;
+            let row = document.querySelector('tr[data-mod-id="' + id + '"]');
+            
+            button.disabled = true;
+            button.classList.add('download-button');
+            const originalText = button.innerText;
+            button.innerHTML = '<span class="progress-spinner"></span>Starting...';
+            
+            // Create or show progress container
+            let progressContainer = document.getElementById('progress-' + id);
+            if (!progressContainer) {
+                progressContainer = document.createElement('div');
+                progressContainer.id = 'progress-' + id;
+                progressContainer.className = 'progress-container';
+                progressContainer.innerHTML = 
+                    '<div class="progress-header">' +
+                        '<div class="progress-message" id="progress-msg-' + id + '">' +
+                            '<span class="progress-spinner"></span>Initializing download...' +
+                        '</div>' +
+                        '<div class="progress-percentage" id="progress-pct-' + id + '">0%</div>' +
+                    '</div>' +
+                    '<div class="progress-bar-outer">' +
+                        '<div class="progress-bar-inner" id="progress-bar-' + id + '" style="width: 0%"></div>' +
+                    '</div>' +
+                    '<div class="progress-file-container">' +
+                        '<div class="progress-file" id="progress-file-' + id + '"></div>' +
+                    '</div>';
+                
+                let cell = row.querySelector('td:last-child');
+                cell.classList.add('download-cell');
+                cell.appendChild(progressContainer);
+            }
+            progressContainer.classList.add('active');
+            
+            // Start the download
+            fetch('/mods/download', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'id=' + id
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'started') {
+                    // Connect to SSE for progress updates
+                    connectToProgress(id, button, originalText);
+                } else {
+                    button.innerHTML = 'Failed';
+                    button.disabled = false;
+                    progressContainer.classList.remove('active');
+                }
+            })
+            .catch(error => {
+                button.innerHTML = 'Error';
+                button.disabled = false;
+                progressContainer.classList.remove('active');
+                console.error('Error:', error);
+            });
+        }
+
+        function connectToProgress(id, button, originalText) {
+            // Close existing connection if any
+            if (activeEventSource) {
+                activeEventSource.close();
+            }
+
+            console.log('[DEBUG] Connecting to SSE for mod ID:', id);
+            const eventSource = new EventSource('/mods/download/progress?id=' + id);
+            activeEventSource = eventSource;
+
+            eventSource.onmessage = function(event) {
+                console.log('[DEBUG] SSE message received:', event.data);
+                const update = JSON.parse(event.data);
+                console.log('[DEBUG] Parsed update:', update);
+                console.log('[DEBUG] Update stage:', update.Stage, 'lowercase:', update.stage);
+                updateProgress(id, update);
+
+                if (update.Stage === 'complete') {
+                    button.innerHTML = '✓ Downloaded';
+                    button.disabled = true;
+                    const progressBar = document.getElementById('progress-bar-' + id);
+                    if (progressBar) {
+                        progressBar.classList.add('complete');
+                    }
+                    
+                    // Hide progress container after a brief moment
+                    setTimeout(() => {
+                        const progressContainer = document.getElementById('progress-' + id);
+                        if (progressContainer) {
+                            progressContainer.classList.remove('active');
+                        }
+                    }, 1000);
+                    
+                    eventSource.close();
+                    activeEventSource = null;
+                    
+                    // If we're in download-all mode, move to next mod
+                    if (isDownloadingAll) {
+                        console.log('[DEBUG] Download complete, queue length:', downloadQueue.length);
+                        
+                        if (downloadQueue.length > 0) {
+                            updateDownloadAllButton();
+                            // Wait a bit before starting next download
+                            setTimeout(() => {
+                                const nextModId = downloadQueue.shift();
+                                console.log('[DEBUG] Starting next download for mod ID:', nextModId);
+                                
+                                // Find the button for this mod
+                                const nextRow = document.querySelector('tr[data-mod-id="' + nextModId + '"]');
+                                if (nextRow) {
+                                    const nextButton = nextRow.querySelector('button[onclick*="downloadMod"]');
+                                    if (nextButton && !nextButton.disabled) {
+                                        console.log('[DEBUG] Clicking next download button');
+                                        nextButton.click();
+                                    } else {
+                                        console.log('[DEBUG] Button not found or disabled, trying next in queue');
+                                        // If button not available, try next in queue
+                                        if (downloadQueue.length > 0) {
+                                            // Recursively try next
+                                            downloadQueue.unshift(nextModId); // Put it back
+                                            downloadQueue.shift(); // Remove it again
+                                            const retryId = downloadQueue.shift();
+                                            const retryRow = document.querySelector('tr[data-mod-id="' + retryId + '"]');
+                                            if (retryRow) {
+                                                const retryButton = retryRow.querySelector('button[onclick*="downloadMod"]');
+                                                if (retryButton) retryButton.click();
+                                            }
+                                        } else {
+                                            // No more mods to download
+                                            isDownloadingAll = false;
+                                            updateDownloadAllButton();
+                                            location.reload();
+                                        }
+                                    }
+                                } else {
+                                    console.log('[DEBUG] Row not found for mod ID:', nextModId);
+                                }
+                            }, 1500);
+                        } else {
+                            // All downloads complete
+                            console.log('[DEBUG] All downloads complete, reloading page');
+                            isDownloadingAll = false;
+                            updateDownloadAllButton();
+                            setTimeout(() => location.reload(), 1000);
+                        }
+                    } else {
+                        // Single download - reload after delay to show UI updated
+                        setTimeout(() => location.reload(), 2000);
+                    }
+                } else if (update.Stage === 'error') {
+                    button.innerHTML = originalText || 'Download';
+                    button.disabled = false;
+                    const progressBar = document.getElementById('progress-bar-' + id);
+                    if (progressBar) {
+                        progressBar.classList.add('error');
+                    }
+                    eventSource.close();
+                    activeEventSource = null;
+                    const msgEl = document.getElementById('progress-msg-' + id);
+                    if (msgEl) {
+                        msgEl.innerHTML = '❌ Error: ' + update.message;
+                    }
+                    
+                    // If we're in download-all mode, move to next mod despite error
+                    if (isDownloadingAll) {
+                        console.log('[DEBUG] Download error, queue length:', downloadQueue.length);
+                        
+                        if (downloadQueue.length > 0) {
+                            updateDownloadAllButton();
+                            setTimeout(() => {
+                                const nextModId = downloadQueue.shift();
+                                console.log('[DEBUG] Starting next download after error for mod ID:', nextModId);
+                                
+                                const nextRow = document.querySelector('tr[data-mod-id="' + nextModId + '"]');
+                                if (nextRow) {
+                                    const nextButton = nextRow.querySelector('button[onclick*="downloadMod"]');
+                                    if (nextButton && !nextButton.disabled) {
+                                        nextButton.click();
+                                    }
+                                }
+                            }, 1500);
+                        } else {
+                            console.log('[DEBUG] All downloads finished (with some errors)');
+                            isDownloadingAll = false;
+                            updateDownloadAllButton();
+                        }
+                    }
+                }
+            };
+
+            eventSource.onerror = function(e) {
+                console.error('SSE connection error:', e);
+                eventSource.close();
+            };
+        }
+
+        function updateProgress(id, update) {
+            console.log('[DEBUG] Updating progress for mod', id, 'with:', update);
+            const msgEl = document.getElementById('progress-msg-' + id);
+            const barEl = document.getElementById('progress-bar-' + id);
+            const pctEl = document.getElementById('progress-pct-' + id);
+            const fileEl = document.getElementById('progress-file-' + id);
+
+            console.log('[DEBUG] Elements found:', {msgEl: !!msgEl, barEl: !!barEl, pctEl: !!pctEl, fileEl: !!fileEl});
+
+            if (msgEl && update.Message) {
+                msgEl.innerHTML = '<span class="progress-spinner"></span>' + update.Message;
+                console.log('[DEBUG] Updated message to:', update.Message);
+            }
+            
+            if (barEl && pctEl && update.Percentage !== undefined) {
+                const percent = Math.round(update.Percentage * 100) / 100;
+                barEl.style.width = percent + '%';
+                pctEl.textContent = percent.toFixed(1) + '%';
+                console.log('[DEBUG] Updated percentage to:', percent);
+            }
+
+            if (fileEl && update.FileName) {
+                // Truncate long filenames from the middle to prevent layout shifts
+                const fileName = update.FileName;
+                const maxLength = 60;
+                let displayName = fileName;
+                
+                if (fileName.length > maxLength) {
+                    const start = fileName.substring(0, maxLength / 2);
+                    const end = fileName.substring(fileName.length - maxLength / 2);
+                    displayName = start + '...' + end;
+                }
+                
+                fileEl.textContent = displayName;
+                fileEl.title = fileName; // Show full name on hover
+                console.log('[DEBUG] Updated filename to:', displayName);
+            }
+        }
+
+        function downloadAll() {
+            // Find all download/update buttons in the table
+            const rows = document.querySelectorAll('tbody tr');
+            downloadQueue = [];
+            
+            console.log('[DEBUG] Found rows:', rows.length);
+            
+            rows.forEach(row => {
+                const modId = row.getAttribute('data-mod-id');
+                // Look for a button with onclick="downloadMod(...)" in this row
+                const downloadBtn = row.querySelector('button[onclick*="downloadMod"]');
+                
+                if (downloadBtn && !downloadBtn.disabled && modId) {
+                    console.log('[DEBUG] Found downloadable mod ID:', modId);
+                    downloadQueue.push(parseInt(modId));
+                }
+            });
+            
+            console.log('[DEBUG] Download queue:', downloadQueue);
+            
+            if (downloadQueue.length === 0) {
+                alert('No mods to download');
+                return;
+            }
+            
+            if (!confirm('Download ' + downloadQueue.length + ' mod(s)?')) {
+                downloadQueue = [];
+                return;
+            }
+            
+            isDownloadingAll = true;
+            updateDownloadAllButton();
+            
+            // Start first download
+            const firstModId = downloadQueue.shift();
+            console.log('[DEBUG] Starting first download for mod ID:', firstModId);
+            
+            const firstRow = document.querySelector('tr[data-mod-id="' + firstModId + '"]');
+            if (firstRow) {
+                const firstButton = firstRow.querySelector('button[onclick*="downloadMod"]');
+                if (firstButton && !firstButton.disabled) {
+                    console.log('[DEBUG] Clicking first download button');
+                    firstButton.click();
+                } else {
+                    console.log('[DEBUG] First button not found or disabled');
+                    isDownloadingAll = false;
+                    updateDownloadAllButton();
+                }
+            } else {
+                console.log('[DEBUG] First row not found for mod ID:', firstModId);
+                isDownloadingAll = false;
+                updateDownloadAllButton();
+            }
+        }
+        
+        function updateDownloadAllButton() {
+            const btn = document.getElementById('download-all-btn');
+            if (btn) {
+                if (isDownloadingAll) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="progress-spinner"></span> Downloading (' + (downloadQueue.length + 1) + ' remaining)';
+                } else {
+                    btn.disabled = false;
+                    btn.innerHTML = 'Download All';
+                }
+            }
+        }
+    </script>
+</head>
+<body>
+    <nav>
+        <h1>Arma 3 Mod Manager</h1>
+        <ul>
+            <li><a href="/">Home</a></li>
+            <li><a href="/settings">Settings</a></li>
+            <li><a href="/modsets">Modsets</a></li>
+            <li><a href="/mods" class="active">Mods</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <h2>Mods</h2>
+        
+        <div class="actions">
+            <button onclick="checkUpdates()" class="button">Check for Updates</button>
+            <button id="download-all-btn" onclick="downloadAll()" class="button">Download All</button>
+            <form method="POST" action="/mods/generate-a3sync" style="display:inline;">
+                <button type="submit" class="button">Generate A3Sync Folder</button>
+            </form>
+            <span id="update-status"></span>
+        </div>
+
+        {{if .Modsets}}
+        <div class="form-group">
+            <label>Filter by Modset:</label>
+            <select id="modset-filter" onchange="window.location.href='/mods?modset=' + this.value">
+                <option value="">All Mods</option>
+                {{range .Modsets}}
+                <option value="{{.ID}}">{{.Name}}</option>
+                {{end}}
+            </select>
+        </div>
+
+        <div class="form-group" style="border: 1px solid #ddd; padding: 15px; margin: 20px 0; border-radius: 5px;">
+            <h3>Add Mod by Workshop ID</h3>
+            <form method="POST" action="/mods/add" style="display: flex; gap: 10px; align-items: flex-end;">
+                <div>
+                    <label for="workshop_id">Workshop ID:</label>
+                    <input type="text" id="workshop_id" name="workshop_id" placeholder="e.g., 450814997" required style="width: 200px;">
+                </div>
+                <div>
+                    <label for="add_modset_id">Add to Modset (optional):</label>
+                    <select id="add_modset_id" name="modset_id">
+                        <option value="">None (standalone mod)</option>
+                        {{range .Modsets}}
+                        <option value="{{.ID}}">{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <button type="submit" class="button">Add Mod</button>
+            </form>
+            <p style="font-size: 12px; color: #666; margin-top: 10px;">
+                Leave modset empty for server-only mods that aren't part of any modset.
+            </p>
+        </div>
+        {{end}}
+
+        {{if .Mods}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Workshop ID</th>
+                    <th>Status</th>
+                    <th>Last Updated</th>
+                    <th>Last Checked</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Mods}}
+                <tr data-mod-id="{{.ID}}" {{if .UpdateAvailable}}class="update-available"{{end}}>
+                    <td>{{.Name}}</td>
+                    <td><a href="https://steamcommunity.com/sharedfiles/filedetails/?id={{.WorkshopID}}" target="_blank">{{.WorkshopID}}</a></td>
+                    <td>
+                        {{if .Downloaded}}
+                            <span class="status-downloaded">Downloaded ✓</span>
+                        {{else}}
+                            <span class="status-not-downloaded">Not Downloaded</span>
+                        {{end}}
+                        {{if .UpdateAvailable}}
+                            <span class="status-update">Update Available!</span>
+                        {{end}}
+                    </td>
+                    <td>{{if .LastUpdated.IsZero}}-{{else}}{{.LastUpdated.Format "2006-01-02 15:04"}}{{end}}</td>
+                    <td>{{if .LastChecked.IsZero}}-{{else}}{{.LastChecked.Format "2006-01-02 15:04"}}{{end}}</td>
+                    <td>
+                        {{if or (not .Downloaded) .UpdateAvailable}}
+                        <button onclick="downloadMod({{.ID}})" class="button-small">
+                            {{if .Downloaded}}Update{{else}}Download{{end}}
+                        </button>
+                        {{else if .Downloaded}}
+                        <button onclick="downloadMod({{.ID}})" class="button-small" style="background: #ff9800;">
+                            Redownload
+                        </button>
+                        {{end}}
+                        <form method="POST" action="/mods/delete" style="display:inline;">
+                            <input type="hidden" name="id" value="{{.ID}}">
+                            <button type="submit" class="button-small button-danger" onclick="return confirm('Delete this mod?')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <p class="info-box">No mods found. Upload a modset to get started.</p>
+        {{end}}
+    </div>
+</body>
+</html>

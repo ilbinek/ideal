@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Modsets - Arma 3 Mod Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav>
+        <h1>Arma 3 Mod Manager</h1>
+        <ul>
+            <li><a href="/">Home</a></li>
+            <li><a href="/settings">Settings</a></li>
+            <li><a href="/modsets" class="active">Modsets</a></li>
+            <li><a href="/mods">Mods</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <h2>Modsets</h2>
+        
+        <div class="upload-section">
+            <h3>Upload Modset HTML</h3>
+            <form method="POST" action="/modsets/upload" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="modset">Select Arma 3 Launcher Preset HTML file:</label>
+                    <input type="file" id="modset" name="modset" accept=".html" required>
+                </div>
+                <button type="submit" class="button">Upload & Parse</button>
+            </form>
+        </div>
+
+        {{if .Modsets}}
+        <h3>Existing Modsets</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Modsets}}
+                <tr>
+                    <td>{{.Name}}</td>
+                    <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                    <td>
+                        <a href="/mods?modset={{.ID}}" class="button-small">View Mods</a>
+                        <a href="/startup-command?modset={{.ID}}" class="button-small">Startup Command</a>
+                        <form method="POST" action="/modsets/delete" style="display:inline;">
+                            <input type="hidden" name="id" value="{{.ID}}">
+                            <button type="submit" class="button-small button-danger" onclick="return confirm('Delete this modset?')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <p class="info-box">No modsets yet. Upload an Arma 3 Launcher preset HTML file to get started.</p>
+        {{end}}
+    </div>
+</body>
+</html>

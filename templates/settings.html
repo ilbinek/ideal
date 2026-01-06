@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Settings - Arma 3 Mod Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav>
+        <h1>Arma 3 Mod Manager</h1>
+        <ul>
+            <li><a href="/">Home</a></li>
+            <li><a href="/settings" class="active">Settings</a></li>
+            <li><a href="/modsets">Modsets</a></li>
+            <li><a href="/mods">Mods</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <h2>Steam Credentials</h2>
+        
+        <p>These credentials will be used with DepotDownloader to download mods from Steam Workshop.</p>
+        
+        <form method="POST" action="/settings/save">
+            <div class="form-group">
+                <label for="username">Steam Username:</label>
+                <input type="text" id="username" name="username" value="{{if .Config}}{{.Config.Username}}{{end}}" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Steam Password:</label>
+                <input type="password" id="password" name="password" value="{{if .Config}}{{.Config.Password}}{{end}}" required>
+                <small>Warning: Password is stored in plaintext in the database. Use a dedicated account or Steam Guard.</small>
+            </div>
+            
+            <button type="submit" class="button">Save Settings</button>
+        </form>
+    </div>
+</body>
+</html>
