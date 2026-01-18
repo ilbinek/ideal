@@ -44,7 +44,7 @@ jobs:
           tar -czvf release-amd64.tar.gz -C release-amd64 .
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: deployment-bundles
           path: |
