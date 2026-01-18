@@ -43,10 +43,16 @@ jobs:
           cp -r templates release-amd64/
           tar -czvf release-amd64.tar.gz -C release-amd64 .
 
-      - name: Upload Artifacts
+      - name: Upload ARM64 Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: deployment-bundles
-          path: |
-            release-arm64.tar.gz
-            release-amd64.tar.gz
+          name: linux-arm64
+          path: release-arm64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload AMD64 Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-amd64
+          path: release-amd64.tar.gz
+          if-no-files-found: error
