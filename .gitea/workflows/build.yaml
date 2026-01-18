@@ -34,6 +34,7 @@ jobs:
           cp ideal-linux-arm64 release-arm64/ideal
           cp -r static release-arm64/
           cp -r templates release-arm64/
+          cp config.json release-arm64/
           tar -czvf release-arm64.tar.gz -C release-arm64 .
 
           # Create a directory for AMD64 release
@@ -41,6 +42,7 @@ jobs:
           cp ideal-linux-amd64 release-amd64/ideal
           cp -r static release-amd64/
           cp -r templates release-amd64/
+          cp config.json release-amd64/
           tar -czvf release-amd64.tar.gz -C release-amd64 .
 
       - name: Upload ARM64 Artifact
