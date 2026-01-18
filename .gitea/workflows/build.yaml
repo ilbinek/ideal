@@ -1,0 +1,52 @@
+name: Cross Compile Go
+run-name: Build and Bundle
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      # Build ARM64
+      - name: Build ARM64
+        run: GOOS=linux GOARCH=arm64 go build -v -o ideal-linux-arm64 .
+
+      # Build AMD64
+      - name: Build AMD64
+        run: GOOS=linux GOARCH=amd64 go build -v -o ideal-linux-amd64 .
+
+      # Create organized archives for download
+      - name: Bundle Artifacts
+        run: |
+          # Create a directory for ARM64 release
+          mkdir release-arm64
+          cp ideal-linux-arm64 release-arm64/ideal
+          cp -r static release-arm64/
+          cp -r templates release-arm64/
+          tar -czvf release-arm64.tar.gz -C release-arm64 .
+
+          # Create a directory for AMD64 release
+          mkdir release-amd64
+          cp ideal-linux-amd64 release-amd64/ideal
+          cp -r static release-amd64/
+          cp -r templates release-amd64/
+          tar -czvf release-amd64.tar.gz -C release-amd64 .
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-bundles
+          path: |
+            release-arm64.tar.gz
+            release-amd64.tar.gz
