@@ -13,6 +13,7 @@ type Config struct {
 	ID       int
 	Username string
 	Password string
+	ApiKey   string
 }
 
 type Modset struct {
@@ -44,7 +45,8 @@ func Init() error {
 	CREATE TABLE IF NOT EXISTS config (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT NOT NULL,
-		password TEXT NOT NULL
+		password TEXT NOT NULL,
+		api_key TEXT
 	);
 
 	CREATE TABLE IF NOT EXISTS modsets (
@@ -90,24 +92,28 @@ func Close() error {
 
 func GetConfig() (*Config, error) {
 	config := &Config{}
-	err := db.QueryRow("SELECT id, username, password FROM config LIMIT 1").
-		Scan(&config.ID, &config.Username, &config.Password)
+	var apiKey sql.NullString
+	err := db.QueryRow("SELECT id, username, password, COALESCE(api_key, '') FROM config LIMIT 1").
+		Scan(&config.ID, &config.Username, &config.Password, &apiKey)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if apiKey.Valid {
+		config.ApiKey = apiKey.String
 	}
 	return config, err
 }
 
-func SaveConfig(username, password string) error {
+func SaveConfig(username, password, apiKey string) error {
 	config, err := GetConfig()
 	if err != nil {
 		return err
 	}
 
 	if config == nil {
-		_, err = db.Exec("INSERT INTO config (username, password) VALUES (?, ?)", username, password)
+		_, err = db.Exec("INSERT INTO config (username, password, api_key) VALUES (?, ?, ?)", username, password, apiKey)
 	} else {
-		_, err = db.Exec("UPDATE config SET username = ?, password = ? WHERE id = ?", username, password, config.ID)
+		_, err = db.Exec("UPDATE config SET username = ?, password = ?, api_key = ? WHERE id = ?", username, password, apiKey, config.ID)
 	}
 	return err
 }

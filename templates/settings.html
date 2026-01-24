@@ -32,6 +32,12 @@
                 <small>Warning: Password is stored in plaintext in the database. Use a dedicated account or Steam Guard.</small>
             </div>
             
+            <div class="form-group">
+                <label for="api_key">Steam Web API Key (optional):</label>
+                <input type="text" id="api_key" name="api_key" value="{{if .Config}}{{.Config.ApiKey}}{{end}}" placeholder="Enter your Steam Web API key">
+                <small>Used for checking mod updates via Steam API. Get your key from <a href="https://steamcommunity.com/dev/apikey" target="_blank" style="color: #4a9eff;">https://steamcommunity.com/dev/apikey</a></small>
+            </div>
+            
             <button type="submit" class="button">Save Settings</button>
         </form>
     </div>

@@ -72,8 +72,9 @@ func SaveSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	username := r.FormValue("username")
 	password := r.FormValue("password")
+	apiKey := r.FormValue("api_key")
 
-	if err := database.SaveConfig(username, password); err != nil {
+	if err := database.SaveConfig(username, password, apiKey); err != nil {
 		log.Println("Error saving config:", err)
 		http.Error(w, "Failed to save settings", http.StatusInternalServerError)
 		return
@@ -173,7 +174,14 @@ func AddModHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch mod name from workshop page
-	modName, err := workshop.GetModName(workshopID)
+	config, err := database.GetConfig()
+	if err != nil || config == nil {
+		log.Printf("Failed to get config: %v\n", err)
+		http.Error(w, "Steam API key not configured", http.StatusInternalServerError)
+		return
+	}
+
+	modName, err := workshop.GetModName(workshopID, config.ApiKey)
 	if err != nil {
 		log.Printf("Failed to fetch mod name for %s: %v\n", workshopID, err)
 		http.Error(w, fmt.Sprintf("Failed to fetch mod info: %v", err), http.StatusInternalServerError)
@@ -290,20 +298,44 @@ func CheckUpdatesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	config, err := database.GetConfig()
+	if err != nil || config == nil || config.ApiKey == "" {
+		log.Printf("Steam API key not configured")
+		http.Error(w, "Steam API key not configured. Please set it in settings.", http.StatusInternalServerError)
+		return
+	}
+
 	updates := make(map[int]bool)
 
-	// Rate limit: 1 request per 2 seconds to avoid Steam throttling
-	for i, mod := range mods {
-		// Add 2 second delay between requests (except for first one)
-		if i > 0 {
-			time.Sleep(2 * time.Second)
-		}
+	// Collect all workshop IDs
+	var workshopIDs []string
+	modMap := make(map[string]database.Mod)
+	for _, mod := range mods {
+		workshopIDs = append(workshopIDs, mod.WorkshopID)
+		modMap[mod.WorkshopID] = mod
+	}
 
-		lastUpdate, err := workshop.CheckUpdate(mod.WorkshopID)
-		if err != nil {
-			log.Printf("Failed to check update for %s: %v\n", mod.Name, err)
+	// Fetch details for all mods in a single batch request
+	details, err := workshop.GetModDetails(workshopIDs, config.ApiKey)
+	if err != nil {
+		log.Printf("Failed to fetch mod details from Steam API: %v\n", err)
+		http.Error(w, fmt.Sprintf("Failed to check updates: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Process each mod's details
+	for _, detail := range details {
+		if detail.Result != 1 {
+			log.Printf("Failed to get details for workshop ID %s, result code: %d\n", detail.PublishedFileID, detail.Result)
 			continue
 		}
+
+		mod, exists := modMap[detail.PublishedFileID]
+		if !exists {
+			continue
+		}
+
+		lastUpdate := time.Unix(detail.TimeUpdated, 0)
 
 		// If mod is downloaded, check if update is newer
 		updateAvailable := false
