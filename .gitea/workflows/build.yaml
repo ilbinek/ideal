@@ -9,6 +9,25 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact_name: ideal-linux-amd64
+            release_name: linux-amd64
+          - goos: linux
+            goarch: arm64
+            artifact_name: ideal-linux-arm64
+            release_name: linux-arm64
+          - goos: windows
+            goarch: amd64
+            artifact_name: ideal-windows-amd64.exe
+            release_name: windows-amd64
+          - goos: windows
+            goarch: arm64
+            artifact_name: ideal-windows-arm64.exe
+            release_name: windows-arm64
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -18,43 +37,36 @@ jobs:
         with:
           go-version: '1.23'
 
-      # Build ARM64
-      - name: Build ARM64
-        run: GOOS=linux GOARCH=arm64 go build -v -o ideal-linux-arm64 .
-
-      # Build AMD64
-      - name: Build AMD64
-        run: GOOS=linux GOARCH=amd64 go build -v -o ideal-linux-amd64 .
-
-      # Create organized archives for download
-      - name: Bundle Artifacts
+      - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
         run: |
-          # Create a directory for ARM64 release
-          mkdir release-arm64
-          cp ideal-linux-arm64 release-arm64/ideal
-          cp -r static release-arm64/
-          cp -r templates release-arm64/
-          cp config.json release-arm64/
-          tar -czvf release-arm64.tar.gz -C release-arm64 .
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -o ${{ matrix.artifact_name }} .
+        shell: bash
 
-          # Create a directory for AMD64 release
-          mkdir release-amd64
-          cp ideal-linux-amd64 release-amd64/ideal
-          cp -r static release-amd64/
-          cp -r templates release-amd64/
-          cp config.json release-amd64/
-          tar -czvf release-amd64.tar.gz -C release-amd64 .
+      - name: Bundle Artifacts (Linux)
+        if: matrix.goos == 'linux'
+        run: |
+          mkdir release-${{ matrix.goarch }}
+          cp ${{ matrix.artifact_name }} release-${{ matrix.goarch }}/ideal
+          cp -r static release-${{ matrix.goarch }}/
+          cp -r templates release-${{ matrix.goarch }}/
+          cp config.json release-${{ matrix.goarch }}/
+          tar -czvf release-${{ matrix.release_name }}.tar.gz -C release-${{ matrix.goarch }} .
 
-      - name: Upload ARM64 Artifact
+      - name: Bundle Artifacts (Windows)
+        if: matrix.goos == 'windows'
+        run: |
+          mkdir release-${{ matrix.goarch }}
+          cp ${{ matrix.artifact_name }} release-${{ matrix.goarch }}/ideal.exe
+          cp -r static release-${{ matrix.goarch }}/
+          cp -r templates release-${{ matrix.goarch }}/
+          cp config.json release-${{ matrix.goarch }}/
+          cd release-${{ matrix.goarch }}
+          zip -r ../release-${{ matrix.release_name }}.zip .
+          cd ..
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: linux-arm64
-          path: release-arm64.tar.gz
-          if-no-files-found: error
-
-      - name: Upload AMD64 Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: linux-amd64
-          path: release-amd64.tar.gz
+          name: ${{ matrix.release_name }}
+          path: release-${{ matrix.release_name }}.*
           if-no-files-found: error
