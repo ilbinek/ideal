@@ -1,4 +1,5 @@
 import type {
+  Downloader,
   DownloadScope,
   Mod,
   Modset,
@@ -60,7 +61,14 @@ export const api = {
 
   // Settings
   getSettings: () => request<Settings>("/api/settings"),
-  saveSettings: (s: { username: string; password: string; apiKey: string }) =>
+  saveSettings: (s: {
+    username: string;
+    password: string;
+    apiKey: string;
+    downloader: Downloader;
+    steamCmdPath: string;
+    depotDownloaderPath: string;
+  }) =>
     request<{ ok: boolean }>("/api/settings", {
       method: "POST",
       body: JSON.stringify(s),

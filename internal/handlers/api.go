@@ -13,6 +13,7 @@ import (
 
 	"arma3modmanager/internal/auth"
 	"arma3modmanager/internal/database"
+	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/parser"
 	"arma3modmanager/internal/queue"
 	"arma3modmanager/internal/utils"
@@ -54,23 +55,34 @@ func SessionHandler(w http.ResponseWriter, r *http.Request) {
 func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	config, _ := database.GetConfig()
 	resp := map[string]interface{}{
-		"username":    "",
-		"apiKey":      "",
-		"hasPassword": false,
+		"username":            "",
+		"apiKey":              "",
+		"hasPassword":         false,
+		"downloader":          depot.DownloaderDepot,
+		"steamCmdPath":        "",
+		"depotDownloaderPath": "",
 	}
 	if config != nil {
 		resp["username"] = config.Username
 		resp["apiKey"] = config.ApiKey
 		resp["hasPassword"] = config.Password != ""
+		if config.Downloader != "" {
+			resp["downloader"] = config.Downloader
+		}
+		resp["steamCmdPath"] = config.SteamCmdPath
+		resp["depotDownloaderPath"] = config.DepotDownloaderPath
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		ApiKey   string `json:"apiKey"`
+		Username            string `json:"username"`
+		Password            string `json:"password"`
+		ApiKey              string `json:"apiKey"`
+		Downloader          string `json:"downloader"`
+		SteamCmdPath        string `json:"steamCmdPath"`
+		DepotDownloaderPath string `json:"depotDownloaderPath"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -85,7 +97,13 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := database.SaveConfig(body.Username, password, body.ApiKey); err != nil {
+	// Coerce the downloader to a known value (default to DepotDownloader).
+	downloader := body.Downloader
+	if downloader != depot.DownloaderSteamCmd {
+		downloader = depot.DownloaderDepot
+	}
+
+	if err := database.SaveConfig(body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath); err != nil {
 		log.Printf("Error saving config: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to save settings")
 		return

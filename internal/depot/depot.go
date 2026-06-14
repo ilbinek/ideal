@@ -17,6 +17,12 @@ const (
 	WorkshopDepot = "107410"
 )
 
+// Downloader identifiers (stored in config.downloader).
+const (
+	DownloaderDepot    = "depotdownloader"
+	DownloaderSteamCmd = "steamcmd"
+)
+
 // ProgressUpdate represents a download progress update
 type ProgressUpdate struct {
 	Stage      string  `json:"stage"`      // "connecting", "logging_in", "downloading", "complete", "error"
@@ -26,16 +32,34 @@ type ProgressUpdate struct {
 	Error      error   `json:"-"`          // Error if any (not serialized; surfaced via Message)
 }
 
-// DownloadMod downloads a mod using DepotDownloader
-func DownloadMod(workshopID, username, password, outputDir string) (string, error) {
-	return DownloadModWithProgress(workshopID, username, password, outputDir, nil)
+// Options configures a single mod download.
+type Options struct {
+	Downloader          string // DownloaderDepot (default) | DownloaderSteamCmd
+	WorkshopID          string
+	Username            string
+	Password            string
+	OutputDir           string // mods are placed at OutputDir/<WorkshopID>
+	DepotDownloaderPath string // optional; blank = "DepotDownloader" on PATH
+	SteamCmdPath        string // optional; blank = "steamcmd" on PATH
 }
 
-// DownloadModWithProgress downloads a mod using DepotDownloader and sends progress updates
-func DownloadModWithProgress(workshopID, username, password, outputDir string, progressChan chan<- ProgressUpdate) (string, error) {
-	log.Printf("[DEBUG] Starting download for workshop ID: %s", workshopID)
+// DownloadWithProgress downloads a mod using the selected downloader and streams
+// progress updates. It returns the local mod path (OutputDir/<WorkshopID>).
+func DownloadWithProgress(opts Options, progressChan chan<- ProgressUpdate) (string, error) {
+	switch opts.Downloader {
+	case DownloaderSteamCmd:
+		return downloadSteamCmd(opts, progressChan)
+	default:
+		return downloadDepotDownloader(opts, progressChan)
+	}
+}
+
+// downloadDepotDownloader downloads a mod using DepotDownloader and sends progress updates
+func downloadDepotDownloader(opts Options, progressChan chan<- ProgressUpdate) (string, error) {
+	workshopID := opts.WorkshopID
+	log.Printf("[DEBUG] Starting DepotDownloader download for workshop ID: %s", workshopID)
 	// Create output directory for this mod
-	modPath := filepath.Join(outputDir, workshopID)
+	modPath := filepath.Join(opts.OutputDir, workshopID)
 
 	// Delete existing mod directory if it exists
 	if err := os.RemoveAll(modPath); err != nil {
@@ -47,13 +71,17 @@ func DownloadModWithProgress(workshopID, username, password, outputDir string, p
 		return "", fmt.Errorf("failed to create mod directory: %w", err)
 	}
 
-	// Run DepotDownloader
+	// Run DepotDownloader (executable path is configurable; defaults to PATH).
+	exeName := opts.DepotDownloaderPath
+	if exeName == "" {
+		exeName = "DepotDownloader"
+	}
 	cmd := exec.Command(
-		"DepotDownloader",
+		exeName,
 		"-app", ArmaAppID,
 		"-pubfile", workshopID,
-		"-username", username,
-		"-password", password,
+		"-username", opts.Username,
+		"-password", opts.Password,
 		"-dir", modPath,
 	)
 

@@ -15,10 +15,15 @@ The frontend is vibecoded (quickly built for functionality over perfection). Con
 
 ### Required Tools
 
-1. **DepotDownloader** - Must be installed and available in your system PATH
-   - Download from: [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader)
-   - Verify installation by running `DepotDownloader` in your terminal
-   - The application will fail to download mods if DepotDownloader is not found
+1. **A downloader** - one of the following, selectable in Settings:
+   - **DepotDownloader** (default) - [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader).
+     Reports per-file download progress.
+   - **SteamCMD** - [SteamCMD docs](https://developer.valvesoftware.com/wiki/SteamCMD).
+     Progress is coarse (stage messages, then 100%).
+   - Each must be on your system `PATH`, or you can set an explicit path to the
+     executable in **Settings → Downloader** (blank = use `PATH`).
+   - The application will fail to download mods if the selected downloader cannot
+     be found.
 
 2. **Steam Account Credentials**
    - You'll need Steam credentials configured in settings
@@ -157,9 +162,12 @@ the Taskfile for `dev`/`web:dev`/`lint` targets).
 
 ## Troubleshooting
 
-**"DepotDownloader not found"**
-- Ensure DepotDownloader is installed and in your system PATH
-- Test by running `DepotDownloader` in terminal
+**"DepotDownloader not found" / "steamcmd download failed"**
+- Ensure the selected downloader is installed and on your system PATH, or set an
+  explicit path in **Settings → Downloader**
+- Test by running `DepotDownloader` (or `steamcmd`) in a terminal
+- SteamCMD writes items to `<steamcmd>/steamapps/workshop/content/107410/<id>`;
+  the app moves them into `./mods/<id>` automatically after a successful run
 
 **Download fails with authentication error**
 - Verify Steam credentials in Settings

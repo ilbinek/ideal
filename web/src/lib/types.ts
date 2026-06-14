@@ -15,10 +15,15 @@ export interface Modset {
   createdAt: string;
 }
 
+export type Downloader = "depotdownloader" | "steamcmd";
+
 export interface Settings {
   username: string;
   apiKey: string;
   hasPassword: boolean;
+  downloader: Downloader;
+  steamCmdPath: string;
+  depotDownloaderPath: string;
 }
 
 export type DownloadStatus = "queued" | "downloading" | "done" | "error";

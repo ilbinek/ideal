@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -10,10 +11,13 @@ import (
 var db *sql.DB
 
 type Config struct {
-	ID       int    `json:"id"`
-	Username string `json:"username"`
-	Password string `json:"-"`
-	ApiKey   string `json:"apiKey"`
+	ID                  int    `json:"id"`
+	Username            string `json:"username"`
+	Password            string `json:"-"`
+	ApiKey              string `json:"apiKey"`
+	Downloader          string `json:"downloader"`          // "depotdownloader" | "steamcmd"
+	SteamCmdPath        string `json:"steamCmdPath"`        // optional; blank = use PATH
+	DepotDownloaderPath string `json:"depotDownloaderPath"` // optional; blank = use PATH
 }
 
 type Modset struct {
@@ -46,7 +50,10 @@ func Init() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT NOT NULL,
 		password TEXT NOT NULL,
-		api_key TEXT
+		api_key TEXT,
+		downloader TEXT DEFAULT 'depotdownloader',
+		steam_cmd_path TEXT DEFAULT '',
+		depot_downloader_path TEXT DEFAULT ''
 	);
 
 	CREATE TABLE IF NOT EXISTS modsets (
@@ -79,8 +86,28 @@ func Init() error {
 	CREATE INDEX IF NOT EXISTS idx_modset_mods_mod ON modset_mods(mod_id);
 	`
 
-	_, err = db.Exec(schema)
-	return err
+	if _, err = db.Exec(schema); err != nil {
+		return err
+	}
+
+	return migrate()
+}
+
+// migrate adds columns introduced after the initial schema to pre-existing
+// databases. SQLite has no "ADD COLUMN IF NOT EXISTS", so we run each ALTER and
+// ignore the "duplicate column name" error when the column already exists.
+func migrate() error {
+	alters := []string{
+		"ALTER TABLE config ADD COLUMN downloader TEXT DEFAULT 'depotdownloader'",
+		"ALTER TABLE config ADD COLUMN steam_cmd_path TEXT DEFAULT ''",
+		"ALTER TABLE config ADD COLUMN depot_downloader_path TEXT DEFAULT ''",
+	}
+	for _, stmt := range alters {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 func Close() error {
@@ -92,28 +119,36 @@ func Close() error {
 
 func GetConfig() (*Config, error) {
 	config := &Config{}
-	var apiKey sql.NullString
-	err := db.QueryRow("SELECT id, username, password, COALESCE(api_key, '') FROM config LIMIT 1").
-		Scan(&config.ID, &config.Username, &config.Password, &apiKey)
+	err := db.QueryRow(`
+		SELECT id, username, password, COALESCE(api_key, ''),
+		       COALESCE(downloader, 'depotdownloader'),
+		       COALESCE(steam_cmd_path, ''),
+		       COALESCE(depot_downloader_path, '')
+		FROM config LIMIT 1`).
+		Scan(&config.ID, &config.Username, &config.Password, &config.ApiKey,
+			&config.Downloader, &config.SteamCmdPath, &config.DepotDownloaderPath)
 	if err == sql.ErrNoRows {
 		return nil, nil
-	}
-	if apiKey.Valid {
-		config.ApiKey = apiKey.String
 	}
 	return config, err
 }
 
-func SaveConfig(username, password, apiKey string) error {
+func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string) error {
 	config, err := GetConfig()
 	if err != nil {
 		return err
 	}
 
 	if config == nil {
-		_, err = db.Exec("INSERT INTO config (username, password, api_key) VALUES (?, ?, ?)", username, password, apiKey)
+		_, err = db.Exec(
+			"INSERT INTO config (username, password, api_key, downloader, steam_cmd_path, depot_downloader_path) VALUES (?, ?, ?, ?, ?, ?)",
+			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
+		)
 	} else {
-		_, err = db.Exec("UPDATE config SET username = ?, password = ?, api_key = ? WHERE id = ?", username, password, apiKey, config.ID)
+		_, err = db.Exec(
+			"UPDATE config SET username = ?, password = ?, api_key = ?, downloader = ?, steam_cmd_path = ?, depot_downloader_path = ? WHERE id = ?",
+			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath, config.ID,
+		)
 	}
 	return err
 }

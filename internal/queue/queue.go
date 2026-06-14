@@ -148,9 +148,15 @@ func (m *Manager) download(item *Item) {
 	var modPath string
 	var dlErr error
 	go func() {
-		modPath, dlErr = depot.DownloadModWithProgress(
-			item.WorkshopID, config.Username, config.Password, modsDirectory, progressChan,
-		)
+		modPath, dlErr = depot.DownloadWithProgress(depot.Options{
+			Downloader:          config.Downloader,
+			WorkshopID:          item.WorkshopID,
+			Username:            config.Username,
+			Password:            config.Password,
+			OutputDir:           modsDirectory,
+			DepotDownloaderPath: config.DepotDownloaderPath,
+			SteamCmdPath:        config.SteamCmdPath,
+		}, progressChan)
 		close(progressChan)
 	}()
 
