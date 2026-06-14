@@ -40,6 +40,7 @@ type runningInstance struct {
 	pid       int
 	startedAt time.Time
 	rptPath   string
+	logBuf    *logBuffer
 }
 
 // Default is the process-wide server manager.
@@ -178,13 +179,17 @@ func (m *Manager) Start(serverID int) error {
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStarting, 0, "")
 
 	startTime := time.Now()
-	pid, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir)
+	logBuf := newLogBuffer(512 * 1024)
+	pid, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir, logBuf)
 	if err != nil {
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
 		return err
 	}
 
 	rptPath, _ := WaitForRPT(srv.Slug, startTime.Add(-time.Second), 30*time.Second)
+	if rptPath == "" {
+		rptPath = ResolveRPTPath(srv.Slug, "")
+	}
 
 	m.mu.Lock()
 	m.instances[serverID] = &runningInstance{
@@ -192,6 +197,7 @@ func (m *Manager) Start(serverID int) error {
 		pid:       pid,
 		startedAt: startTime,
 		rptPath:   rptPath,
+		logBuf:    logBuf,
 	}
 	m.mu.Unlock()
 
@@ -251,6 +257,17 @@ func (m *Manager) ActiveRPTPath(serverID int) string {
 		return srv.ActiveRPT
 	}
 	return ""
+}
+
+// ReadProcessLog returns new stdout/stderr captured since offset.
+func (m *Manager) ReadProcessLog(serverID, offset int) (string, int) {
+	m.mu.Lock()
+	inst, ok := m.instances[serverID]
+	m.mu.Unlock()
+	if !ok || inst.logBuf == nil {
+		return "", offset
+	}
+	return inst.logBuf.ReadFrom(offset)
 }
 
 func (m *Manager) waitProcess(serverID, pid int) {

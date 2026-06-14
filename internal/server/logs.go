@@ -21,32 +21,17 @@ type LogEntry struct {
 	ModTime time.Time `json:"modTime"`
 }
 
-// ListLogs returns .rpt files under the server profiles directory.
+// ListLogs returns .rpt files under the server instance (root + profiles).
 func ListLogs(slug string) ([]LogEntry, error) {
-	profilesDir := filepath.Join(InstanceDir(slug), "profiles")
+	instanceDir := InstanceDir(slug)
+	seen := make(map[string]struct{})
 	var entries []LogEntry
 
-	err := filepath.Walk(profilesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(strings.ToLower(info.Name()), ".rpt") {
-			entries = append(entries, LogEntry{
-				Name:    info.Name(),
-				Path:    path,
-				Size:    info.Size(),
-				ModTime: info.ModTime(),
-			})
-		}
-		return nil
-	})
-	if err != nil && !os.IsNotExist(err) {
+	if err := collectRPTFiles(instanceDir, false, seen, &entries); err != nil {
+		return nil, err
+	}
+	profilesDir := filepath.Join(instanceDir, "profiles")
+	if err := collectRPTFiles(profilesDir, true, seen, &entries); err != nil {
 		return nil, err
 	}
 
@@ -54,6 +39,70 @@ func ListLogs(slug string) ([]LogEntry, error) {
 		return entries[i].ModTime.After(entries[j].ModTime)
 	})
 	return entries, nil
+}
+
+func collectRPTFiles(dir string, recursive bool, seen map[string]struct{}, entries *[]LogEntry) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+
+	add := func(path string, fi os.FileInfo) {
+		if !strings.HasSuffix(strings.ToLower(fi.Name()), ".rpt") {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		*entries = append(*entries, LogEntry{
+			Name:    fi.Name(),
+			Path:    path,
+			Size:    fi.Size(),
+			ModTime: fi.ModTime(),
+		})
+	}
+
+	if !recursive {
+		items, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		for _, item := range items {
+			if item.IsDir() {
+				continue
+			}
+			fi, err := item.Info()
+			if err != nil {
+				continue
+			}
+			add(filepath.Join(dir, item.Name()), fi)
+		}
+		return nil
+	}
+
+	return filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		add(path, fi)
+		return nil
+	})
 }
 
 // ReadLog reads a log file with optional offset and limit.
@@ -77,7 +126,7 @@ func ReadLog(slug, filename string, offset, limit int64) (content string, totalS
 		return "", 0, fmt.Errorf("log file not found")
 	}
 
-	f, err := os.Open(logPath)
+	f, err := openLogFile(logPath)
 	if err != nil {
 		return "", 0, err
 	}
@@ -108,7 +157,18 @@ func ReadLog(slug, filename string, offset, limit int64) (content string, totalS
 	return string(buf[:n]), totalSize, nil
 }
 
-// FindNewestRPT returns the most recently modified .rpt in profiles.
+// ResolveRPTPath returns the best RPT file path for tailing.
+func ResolveRPTPath(slug, preferred string) string {
+	if preferred != "" {
+		if _, err := os.Stat(preferred); err == nil {
+			return preferred
+		}
+	}
+	path, _ := FindNewestRPT(slug)
+	return path
+}
+
+// FindNewestRPT returns the most recently modified .rpt in the instance.
 func FindNewestRPT(slug string) (string, error) {
 	logs, err := ListLogs(slug)
 	if err != nil || len(logs) == 0 {
@@ -119,7 +179,7 @@ func FindNewestRPT(slug string) (string, error) {
 
 // TailLog reads new content from a file starting at offset.
 func TailLog(path string, offset int64) (string, int64, error) {
-	f, err := os.Open(path)
+	f, err := openLogFile(path)
 	if err != nil {
 		return "", offset, err
 	}

@@ -3,17 +3,22 @@
 package server
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
 )
 
-func startProcess(binary string, args []string, workDir string) (int, error) {
+func startProcess(binary string, args []string, workDir string, capture io.Writer) (int, error) {
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = workDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	out := io.Writer(os.Stdout)
+	if capture != nil {
+		out = io.MultiWriter(os.Stdout, capture)
+	}
+	cmd.Stdout = out
+	cmd.Stderr = out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {

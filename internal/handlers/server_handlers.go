@@ -696,34 +696,41 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var offset int64
+	var bufOffset int64
+	var rptOffset int64
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+
+	srv, err := database.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			rptPath := server.Default.ActiveRPTPath(id)
-			if rptPath == "" {
-				srv, err := database.GetServer(id)
-				if err == nil {
-					rptPath, _ = server.FindNewestRPT(srv.Slug)
+			source := "console"
+			var chunk string
+			if c, newBufOffset := server.Default.ReadProcessLog(id, int(bufOffset)); c != "" {
+				chunk = c
+				bufOffset = int64(newBufOffset)
+			} else {
+				rptPath := server.ResolveRPTPath(srv.Slug, server.Default.ActiveRPTPath(id))
+				if rptPath == "" {
+					continue
+				}
+				source = rptPath
+				var err error
+				chunk, rptOffset, err = server.TailLog(rptPath, rptOffset)
+				if err != nil || chunk == "" {
+					continue
 				}
 			}
-			if rptPath == "" {
-				continue
-			}
-			chunk, newOffset, err := server.TailLog(rptPath, offset)
-			if err != nil {
-				continue
-			}
-			offset = newOffset
-			if chunk == "" {
-				continue
-			}
-			data, _ := json.Marshal(map[string]string{"chunk": chunk, "path": rptPath})
+
+			data, _ := json.Marshal(map[string]string{"chunk": chunk, "path": source})
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		}

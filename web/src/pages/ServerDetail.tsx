@@ -641,6 +641,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   const logs = useQuery({
     queryKey: ["serverLogs", serverId],
     queryFn: () => api.listServerLogs(serverId),
+    refetchInterval: isRunning ? 3000 : false,
   });
   const [selected, setSelected] = useState<string | null>(null);
   const [archived, setArchived] = useState("");
@@ -659,7 +660,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
         </CardHeader>
         <CardContent className="max-h-96 overflow-y-auto">
           <ul className="text-sm">
-            {logs.data?.map((l) => (
+            {(logs.data ?? []).map((l) => (
               <li key={l.name}>
                 <button
                   type="button"
@@ -686,7 +687,9 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
             {isRunning ? "Live tail" : selected ? selected : "Log viewer"}
           </CardTitle>
           {activePath && isRunning && (
-            <CardDescription className="truncate text-xs">{activePath}</CardDescription>
+            <CardDescription className="truncate text-xs">
+              {activePath === "console" ? "Live server output" : activePath}
+            </CardDescription>
           )}
         </CardHeader>
         <CardContent>
