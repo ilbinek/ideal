@@ -79,6 +79,9 @@ func APIHandler() http.Handler {
 	// Server config
 	mux.HandleFunc("GET /api/servers/{id}/config/{name}", apiAuth(GetServerConfigHandler))
 	mux.HandleFunc("PUT /api/servers/{id}/config/{name}", apiAuth(PutServerConfigHandler))
+	mux.HandleFunc("GET /api/servers/{id}/profile/files", apiAuth(ListProfileFilesHandler))
+	mux.HandleFunc("GET /api/servers/{id}/profile/{filename}", apiAuth(GetProfileFileHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/profile/{filename}", apiAuth(PutProfileFileHandler))
 
 	// Server logs
 	mux.HandleFunc("GET /api/servers/{id}/logs", apiAuth(ListServerLogsHandler))

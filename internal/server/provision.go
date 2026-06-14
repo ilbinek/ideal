@@ -37,6 +37,13 @@ func ProvisionServer(serverID int) error {
 			return err
 		}
 	}
+	profileName := srv.ProfileName
+	if profileName == "" {
+		profileName = "Server"
+	}
+	if err := os.MkdirAll(filepath.Join(instanceDir, "profiles", profileName), 0755); err != nil {
+		return err
+	}
 
 	// Default configs on first create
 	serverCfgPath := filepath.Join(instanceDir, "server.cfg")

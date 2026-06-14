@@ -606,49 +606,119 @@ function KeysTab({ serverId }: { serverId: number }) {
 }
 
 function ConfigTab({ serverId }: { serverId: number }) {
-  const [activeFile, setActiveFile] = useState<"server.cfg" | "basic.cfg">("server.cfg");
+  type ConfigKind = "server.cfg" | "basic.cfg" | "profile";
+
+  const server = useQuery({
+    queryKey: ["servers", serverId],
+    queryFn: () => api.getServer(serverId),
+  });
+  const [kind, setKind] = useState<ConfigKind>("server.cfg");
+  const [profileFile, setProfileFile] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [dirty, setDirty] = useState(false);
 
-  const cfg = useQuery({
-    queryKey: ["config", serverId, activeFile],
-    queryFn: () => api.getServerConfig(serverId, activeFile),
+  const profileFiles = useQuery({
+    queryKey: ["profileFiles", serverId],
+    queryFn: () => api.listProfileFiles(serverId),
+    enabled: kind === "profile",
   });
+
+  const cfg = useQuery({
+    queryKey: ["config", serverId, kind, profileFile],
+    queryFn: () => {
+      if (kind === "profile" && profileFile) {
+        return api.getProfileFile(serverId, profileFile);
+      }
+      return api.getServerConfig(serverId, kind);
+    },
+    enabled: kind !== "profile" || !!profileFile,
+  });
+
+  useEffect(() => {
+    if (kind !== "profile") return;
+    if (profileFiles.data?.length && !profileFile) {
+      setProfileFile(profileFiles.data[0].name);
+    }
+  }, [kind, profileFiles.data, profileFile]);
 
   useEffect(() => {
     if (cfg.data) {
       setContent(cfg.data.content);
       setDirty(false);
     }
-  }, [cfg.data, activeFile]);
+  }, [cfg.data, kind, profileFile]);
 
   const save = useMutation({
-    mutationFn: () => api.putServerConfig(serverId, activeFile, content),
+    mutationFn: () => {
+      if (kind === "profile" && profileFile) {
+        return api.putProfileFile(serverId, profileFile, content);
+      }
+      return api.putServerConfig(serverId, kind, content);
+    },
     onSuccess: () => setDirty(false),
   });
 
+  const profileLabel = server.data?.profileName ?? "Server";
+
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-4">
-        <div className="flex gap-2">
-          {(["server.cfg", "basic.cfg"] as const).map((f) => (
-            <Button
-              key={f}
-              size="sm"
-              variant={activeFile === f ? "default" : "outline"}
-              onClick={() => setActiveFile(f)}
-            >
-              {f}
-            </Button>
-          ))}
+      <CardHeader className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap gap-2">
+            {(["server.cfg", "basic.cfg", "profile"] as const).map((k) => (
+              <Button
+                key={k}
+                size="sm"
+                variant={kind === k ? "default" : "outline"}
+                onClick={() => {
+                  setKind(k);
+                  setDirty(false);
+                }}
+              >
+                {k === "profile" ? "Profile" : k}
+              </Button>
+            ))}
+          </div>
+          <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+            Save
+          </Button>
         </div>
-        <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
-          Save
-        </Button>
+        {kind === "profile" && (
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-xs text-muted-foreground">
+              Profile folder: <code>profiles/{profileLabel}/</code>
+            </p>
+            {profileFiles.data && profileFiles.data.length > 0 ? (
+              <select
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                value={profileFile ?? ""}
+                onChange={(e) => {
+                  setProfileFile(e.target.value);
+                  setDirty(false);
+                }}
+              >
+                {profileFiles.data.map((f) => (
+                  <option key={f.name} value={f.name}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No profile files yet — start the server once to generate them.
+              </p>
+            )}
+          </div>
+        )}
       </CardHeader>
       <CardContent>
         {cfg.isLoading ? (
           <Loader2 className="size-5 animate-spin" />
+        ) : kind === "profile" && !profileFile ? (
+          <p className="text-sm text-muted-foreground">
+            No profile file selected. Run the server to create profile files in{" "}
+            <code>profiles/{profileLabel}/</code>.
+          </p>
         ) : (
           <textarea
             className="min-h-[400px] w-full rounded-md border border-input bg-background p-3 font-mono text-xs"

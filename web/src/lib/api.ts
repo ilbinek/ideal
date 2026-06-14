@@ -8,6 +8,7 @@ import type {
   LogEntry,
   Mod,
   Modset,
+  ProfileFileEntry,
   QueueSnapshot,
   ServerKeysResponse,
   ServerMod,
@@ -216,6 +217,18 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+
+  listProfileFiles: (id: number) =>
+    request<ProfileFileEntry[]>(`/api/servers/${id}/profile/files`),
+  getProfileFile: (id: number, filename: string) =>
+    request<{ content: string }>(
+      `/api/servers/${id}/profile/${encodeURIComponent(filename)}`,
+    ),
+  putProfileFile: (id: number, filename: string, content: string) =>
+    request<{ ok: boolean }>(
+      `/api/servers/${id}/profile/${encodeURIComponent(filename)}`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
 
   // Logs
   listServerLogs: (id: number) => request<LogEntry[]>(`/api/servers/${id}/logs`),

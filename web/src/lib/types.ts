@@ -144,6 +144,12 @@ export interface LogEntry {
   modTime: string;
 }
 
+export interface ProfileFileEntry {
+  name: string;
+  size: number;
+  modTime: string;
+}
+
 export interface LogContent {
   content: string;
   totalSize: number;
