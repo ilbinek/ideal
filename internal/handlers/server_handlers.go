@@ -650,6 +650,26 @@ func ListServerLogsHandler(w http.ResponseWriter, r *http.Request) {
 	if logs == nil {
 		logs = []server.LogEntry{}
 	}
+	if sessionPath := server.Default.ActiveSessionLogPath(id); sessionPath != "" {
+		if info, err := os.Stat(sessionPath); err == nil {
+			name := filepath.Base(sessionPath)
+			found := false
+			for _, entry := range logs {
+				if entry.Name == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				logs = append([]server.LogEntry{{
+					Name:    name,
+					Path:    sessionPath,
+					Size:    info.Size(),
+					ModTime: info.ModTime(),
+				}}, logs...)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, logs)
 }
 
@@ -698,7 +718,8 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	var bufOffset int64
 	var rptOffset int64
-	ticker := time.NewTicker(500 * time.Millisecond)
+	var sessionOffset int64
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
 	srv, err := database.GetServer(id)
@@ -712,22 +733,40 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			source := "console"
-			var chunk string
-			if c, newBufOffset := server.Default.ReadProcessLog(id, int(bufOffset)); c != "" {
-				chunk = c
-				bufOffset = int64(newBufOffset)
-			} else {
-				rptPath := server.ResolveRPTPath(srv.Slug, server.Default.ActiveRPTPath(id))
-				if rptPath == "" {
-					continue
+			var chunk, source string
+
+			rptPath := server.ResolveRPTPath(srv.Slug, server.Default.ActiveRPTPath(id))
+			if rptPath != "" {
+				c, newOffset, err := server.TailLog(rptPath, rptOffset)
+				if err == nil && c != "" {
+					chunk = c
+					rptOffset = newOffset
+					source = rptPath
 				}
-				source = rptPath
-				var err error
-				chunk, rptOffset, err = server.TailLog(rptPath, rptOffset)
-				if err != nil || chunk == "" {
-					continue
+			}
+
+			if chunk == "" {
+				sessionPath := server.Default.ActiveSessionLogPath(id)
+				if sessionPath != "" {
+					c, newOffset, err := server.TailLog(sessionPath, sessionOffset)
+					if err == nil && c != "" {
+						chunk = c
+						sessionOffset = newOffset
+						source = sessionPath
+					}
 				}
+			}
+
+			if chunk == "" {
+				if c, newBufOffset := server.Default.ReadProcessLog(id, int(bufOffset)); c != "" {
+					chunk = c
+					bufOffset = int64(newBufOffset)
+					source = "console"
+				}
+			}
+
+			if chunk == "" {
+				continue
 			}
 
 			data, _ := json.Marshal(map[string]string{"chunk": chunk, "path": source})

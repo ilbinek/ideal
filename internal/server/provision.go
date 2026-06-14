@@ -32,7 +32,7 @@ func ProvisionServer(serverID int) error {
 	}
 
 	// Instance-owned directories
-	for _, sub := range []string{"profiles", "keys", "mpmissions", "mods", "servermods"} {
+	for _, sub := range []string{"profiles", "keys", "mpmissions", "mods", "servermods", "logs"} {
 		if err := os.MkdirAll(filepath.Join(instanceDir, sub), 0755); err != nil {
 			return err
 		}

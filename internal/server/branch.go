@@ -222,6 +222,6 @@ func ServerBinaryName(installPath string) (string, error) {
 // instanceSkipEntries are never symlinked from branch into instance.
 var instanceSkipEntries = map[string]bool{
 	"profiles": true, "keys": true, "mpmissions": true,
-	"mods": true, "servermods": true,
+	"mods": true, "servermods": true, "logs": true,
 	"server.cfg": true, "basic.cfg": true,
 }

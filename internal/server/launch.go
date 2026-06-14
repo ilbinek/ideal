@@ -38,12 +38,13 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 	binaryName := filepath.Base(filepath.FromSlash(binaryRel))
 	binaryPath := filepath.Join(instanceDir, binaryName)
 
+	profileDir := filepath.ToSlash(filepath.Join("profiles", srv.ProfileName))
 	args := []string{
 		"-port=" + fmt.Sprint(srv.GamePort),
 		"-steamPort=" + fmt.Sprint(srv.SteamPort),
 		"-cfg=basic.cfg",
 		"-config=server.cfg",
-		"-profiles=profiles",
+		"-profiles=" + profileDir,
 		"-name=" + srv.ProfileName,
 	}
 

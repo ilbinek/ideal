@@ -669,7 +669,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   const logs = useQuery({
     queryKey: ["serverLogs", serverId],
     queryFn: () => api.listServerLogs(serverId),
-    refetchInterval: isRunning ? 3000 : false,
+    refetchInterval: isRunning ? 2000 : false,
   });
   const [selected, setSelected] = useState<string | null>(null);
   const [archived, setArchived] = useState("");
@@ -685,6 +685,9 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
       <Card className="lg:col-span-1">
         <CardHeader>
           <CardTitle className="text-base">Log files</CardTitle>
+          <CardDescription>
+            Session logs and Arma RPT files under this server instance.
+          </CardDescription>
         </CardHeader>
         <CardContent className="max-h-96 overflow-y-auto">
           <ul className="text-sm">

@@ -3,6 +3,8 @@ package server
 import (
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -36,11 +38,12 @@ type Manager struct {
 }
 
 type runningInstance struct {
-	serverID  int
-	pid       int
-	startedAt time.Time
-	rptPath   string
-	logBuf    *logBuffer
+	serverID      int
+	pid           int
+	startedAt     time.Time
+	rptPath       string
+	sessionLog    *sessionLogWriter
+	sessionLogPath string
 }
 
 // Default is the process-wide server manager.
@@ -179,9 +182,20 @@ func (m *Manager) Start(serverID int) error {
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStarting, 0, "")
 
 	startTime := time.Now()
-	logBuf := newLogBuffer(512 * 1024)
-	pid, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir, logBuf)
+	if err := os.MkdirAll(filepath.Join(InstanceDir(srv.Slug), "logs"), 0755); err != nil {
+		return fmt.Errorf("failed to create logs directory: %w", err)
+	}
+	sessionLogPath := filepath.Join(InstanceDir(srv.Slug), "logs",
+		fmt.Sprintf("session-%s.log", startTime.Format("2006-01-02_150405")))
+	sessionFile, err := os.OpenFile(sessionLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		return fmt.Errorf("failed to create session log: %w", err)
+	}
+	sessionLog := newSessionLogWriter(sessionFile, 512*1024)
+
+	pid, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
+	if err != nil {
+		_ = sessionLog.Close()
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
 		return err
 	}
@@ -193,11 +207,12 @@ func (m *Manager) Start(serverID int) error {
 
 	m.mu.Lock()
 	m.instances[serverID] = &runningInstance{
-		serverID:  serverID,
-		pid:       pid,
-		startedAt: startTime,
-		rptPath:   rptPath,
-		logBuf:    logBuf,
+		serverID:       serverID,
+		pid:            pid,
+		startedAt:      startTime,
+		rptPath:        rptPath,
+		sessionLog:     sessionLog,
+		sessionLogPath: sessionLogPath,
 	}
 	m.mu.Unlock()
 
@@ -237,11 +252,20 @@ func (m *Manager) Stop(serverID int) error {
 	}
 
 	m.mu.Lock()
+	m.closeInstanceLog(inst)
 	delete(m.instances, serverID)
 	m.mu.Unlock()
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, inst.rptPath)
 	m.broadcast()
 	return nil
+}
+
+func (m *Manager) closeInstanceLog(inst *runningInstance) {
+	if inst == nil || inst.sessionLog == nil {
+		return
+	}
+	_ = inst.sessionLog.Close()
+	inst.sessionLog = nil
 }
 
 // Restart stops then starts a server.
@@ -270,16 +294,29 @@ func (m *Manager) ReadProcessLog(serverID, offset int) (string, int) {
 	m.mu.Lock()
 	inst, ok := m.instances[serverID]
 	m.mu.Unlock()
-	if !ok || inst.logBuf == nil {
+	if !ok || inst.sessionLog == nil {
 		return "", offset
 	}
-	return inst.logBuf.ReadFrom(offset)
+	return inst.sessionLog.ReadFrom(offset)
+}
+
+// ActiveSessionLogPath returns the on-disk session log for a running server.
+func (m *Manager) ActiveSessionLogPath(serverID int) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[serverID]; ok {
+		return inst.sessionLogPath
+	}
+	return ""
 }
 
 func (m *Manager) waitProcess(serverID, pid int) {
 	waitProcess(pid)
 
 	m.mu.Lock()
+	if inst, ok := m.instances[serverID]; ok {
+		m.closeInstanceLog(inst)
+	}
 	delete(m.instances, serverID)
 	m.mu.Unlock()
 

@@ -21,17 +21,21 @@ type LogEntry struct {
 	ModTime time.Time `json:"modTime"`
 }
 
-// ListLogs returns .rpt files under the server instance (root + profiles).
+// ListLogs returns .rpt and session .log files under the server instance.
 func ListLogs(slug string) ([]LogEntry, error) {
 	instanceDir := InstanceDir(slug)
 	seen := make(map[string]struct{})
 	var entries []LogEntry
 
-	if err := collectRPTFiles(instanceDir, false, seen, &entries); err != nil {
+	logsDir := filepath.Join(instanceDir, "logs")
+	if err := collectLogFiles(logsDir, false, seen, &entries); err != nil {
+		return nil, err
+	}
+	if err := collectLogFiles(instanceDir, false, seen, &entries); err != nil {
 		return nil, err
 	}
 	profilesDir := filepath.Join(instanceDir, "profiles")
-	if err := collectRPTFiles(profilesDir, true, seen, &entries); err != nil {
+	if err := collectLogFiles(profilesDir, true, seen, &entries); err != nil {
 		return nil, err
 	}
 
@@ -41,7 +45,12 @@ func ListLogs(slug string) ([]LogEntry, error) {
 	return entries, nil
 }
 
-func collectRPTFiles(dir string, recursive bool, seen map[string]struct{}, entries *[]LogEntry) error {
+func isLogFile(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".rpt") || strings.HasSuffix(lower, ".log")
+}
+
+func collectLogFiles(dir string, recursive bool, seen map[string]struct{}, entries *[]LogEntry) error {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -54,7 +63,7 @@ func collectRPTFiles(dir string, recursive bool, seen map[string]struct{}, entri
 	}
 
 	add := func(path string, fi os.FileInfo) {
-		if !strings.HasSuffix(strings.ToLower(fi.Name()), ".rpt") {
+		if !isLogFile(fi.Name()) {
 			return
 		}
 		if _, ok := seen[path]; ok {
@@ -105,25 +114,44 @@ func collectRPTFiles(dir string, recursive bool, seen map[string]struct{}, entri
 	})
 }
 
+func findLogPath(slug, filename string) (string, error) {
+	instanceDir := InstanceDir(slug)
+	candidates := []string{
+		filepath.Join(instanceDir, "logs", filename),
+		filepath.Join(instanceDir, filename),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+
+	profilesDir := filepath.Join(instanceDir, "profiles")
+	var found string
+	_ = filepath.Walk(profilesDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if !info.IsDir() && info.Name() == filename {
+			found = path
+		}
+		return nil
+	})
+	if found != "" {
+		return found, nil
+	}
+	return "", fmt.Errorf("log file not found")
+}
+
 // ReadLog reads a log file with optional offset and limit.
 func ReadLog(slug, filename string, offset, limit int64) (content string, totalSize int64, err error) {
 	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
 		return "", 0, fmt.Errorf("invalid filename")
 	}
 
-	profilesDir := filepath.Join(InstanceDir(slug), "profiles")
-	var logPath string
-	err = filepath.Walk(profilesDir, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if !info.IsDir() && info.Name() == filename {
-			logPath = path
-		}
-		return nil
-	})
-	if err != nil || logPath == "" {
-		return "", 0, fmt.Errorf("log file not found")
+	logPath, err := findLogPath(slug, filename)
+	if err != nil {
+		return "", 0, err
 	}
 
 	f, err := openLogFile(logPath)
