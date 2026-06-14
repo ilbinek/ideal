@@ -159,7 +159,12 @@ func provisionKeys(instanceDir string, serverID int) error {
 		if sm.ModID != nil {
 			mod, err := database.GetMod(*sm.ModID)
 			if err == nil && mod.Downloaded && mod.LocalPath != "" {
-				modPaths = append(modPaths, mod.LocalPath)
+				addonsPath := utils.AddonsModPath(mod.LocalPath)
+				if _, err := os.Stat(addonsPath); err == nil {
+					modPaths = append(modPaths, addonsPath)
+				} else {
+					modPaths = append(modPaths, mod.LocalPath)
+				}
 			}
 		} else if sm.CustomPath != "" {
 			modPaths = append(modPaths, sm.CustomPath)

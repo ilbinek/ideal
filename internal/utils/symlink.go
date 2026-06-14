@@ -11,17 +11,23 @@ import (
 const AddonsDirectory = "./addons"
 const A3SyncDirectory = "./a3sync"
 
+// AddonsRoot returns the addons directory under the IDEAL data root.
+func AddonsRoot() string {
+	return filepath.Join(DataRoot(), "addons")
+}
+
+// AddonsModPath returns the lowercased addons mirror path for a downloaded mod.
+func AddonsModPath(modPath string) string {
+	return filepath.Join(AddonsRoot(), strings.ToLower(filepath.Base(modPath)))
+}
+
 // SyncModToAddons creates a lowercased mirror of a mod in the addons directory with symlinks
 func SyncModToAddons(modPath string) error {
 	if modPath == "" {
 		return fmt.Errorf("mod path is empty")
 	}
 
-	// Get the base name of the mod directory (e.g., 2911278094)
-	modBaseName := filepath.Base(modPath)
-
-	// Create lowercase version of the mod folder name
-	addonsModPath := filepath.Join(AddonsDirectory, strings.ToLower(modBaseName))
+	addonsModPath := AddonsModPath(modPath)
 
 	log.Printf("[SYMLINK] Syncing mod from %s to %s", modPath, addonsModPath)
 
@@ -102,11 +108,7 @@ func RemoveModFromAddons(modPath string) error {
 		return fmt.Errorf("mod path is empty")
 	}
 
-	// Get the base name of the mod directory (e.g., 2911278094)
-	modBaseName := filepath.Base(modPath)
-
-	// Create lowercase version of the mod folder name
-	addonsModPath := filepath.Join(AddonsDirectory, strings.ToLower(modBaseName))
+	addonsModPath := AddonsModPath(modPath)
 
 	log.Printf("[SYMLINK] Removing mod from addons: %s", addonsModPath)
 
@@ -127,7 +129,7 @@ func RemoveModFromAddons(modPath string) error {
 
 // EnsureAddonsDirectory creates the addons directory if it doesn't exist
 func EnsureAddonsDirectory() error {
-	if err := os.MkdirAll(AddonsDirectory, 0755); err != nil {
+	if err := os.MkdirAll(AddonsRoot(), 0755); err != nil {
 		return fmt.Errorf("failed to create addons directory: %v", err)
 	}
 	return nil

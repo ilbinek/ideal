@@ -106,18 +106,24 @@ func SanitizeModLabel(label string) string {
 }
 
 // ModLinkName returns the symlink folder name and source path for a server mod entry.
-// Managed mods use the Steam Workshop ID; custom mods use the folder basename.
+// Managed mods symlink from the lowercased addons mirror, not the raw mods download folder.
 func ModLinkName(sm database.ServerMod) (linkName, srcPath string, ok bool) {
 	if sm.ModID != nil {
 		mod, err := database.GetMod(*sm.ModID)
 		if err != nil || !mod.Downloaded || mod.LocalPath == "" {
 			return "", "", false
 		}
-		linkName = mod.WorkshopID
+		linkName = strings.ToLower(mod.WorkshopID)
 		if linkName == "" {
-			linkName = filepath.Base(mod.LocalPath)
+			linkName = strings.ToLower(filepath.Base(mod.LocalPath))
 		}
-		return linkName, mod.LocalPath, true
+		srcPath = utils.AddonsModPath(mod.LocalPath)
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			if syncErr := utils.SyncModToAddons(mod.LocalPath); syncErr != nil {
+				return "", "", false
+			}
+		}
+		return linkName, srcPath, true
 	}
 	if sm.CustomPath != "" {
 		if err := ValidateCustomModPath(sm.CustomPath); err != nil {
