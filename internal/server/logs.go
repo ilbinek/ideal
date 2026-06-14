@@ -272,6 +272,19 @@ func IsPortAvailable(port int) bool {
 	return true
 }
 
+// IsPortInUse reports whether something is already listening on a TCP port.
+func IsPortInUse(port int) bool {
+	return !IsPortAvailable(port)
+}
+
+// ServerAlive reports whether a server process or its game port appears active.
+func ServerAlive(pid, gamePort int) bool {
+	if pid > 0 && processRunning(pid) {
+		return true
+	}
+	return IsPortInUse(gamePort)
+}
+
 // ListMissions lists PBO files in mpmissions.
 func ListMissions(slug string) ([]LogEntry, error) {
 	missionsDir := filepath.Join(InstanceDir(slug), "mpmissions")

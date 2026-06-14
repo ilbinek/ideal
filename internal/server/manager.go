@@ -54,8 +54,25 @@ var Default = &Manager{
 
 // Init reconciles DB state on startup.
 func Init() {
-	if err := database.ReconcileServerStatuses(); err != nil {
+	ReconcileStatuses()
+}
+
+// ReconcileStatuses marks orphaned running states; servers still bound to their
+// game port are left alone (Arma often outlives the launcher PID we captured).
+func ReconcileStatuses() {
+	servers, err := database.GetServers()
+	if err != nil {
 		log.Printf("[SERVER] failed to reconcile statuses: %v", err)
+		return
+	}
+	for _, s := range servers {
+		if s.Status != database.ServerStatusRunning && s.Status != database.ServerStatusStarting {
+			continue
+		}
+		if ServerAlive(s.PID, s.GamePort) {
+			continue
+		}
+		_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, 0, s.ActiveRPT)
 	}
 }
 
@@ -219,7 +236,7 @@ func (m *Manager) Start(serverID int) error {
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, pid, rptPath)
 	m.broadcast()
 
-	go m.waitProcess(serverID, pid)
+	go m.watchServer(serverID)
 	return nil
 }
 
@@ -310,8 +327,37 @@ func (m *Manager) ActiveSessionLogPath(serverID int) string {
 	return ""
 }
 
-func (m *Manager) waitProcess(serverID, pid int) {
-	waitProcess(pid)
+func (m *Manager) watchServer(serverID int) {
+	const pollInterval = 2 * time.Second
+	const deadThreshold = 2
+
+	consecutiveDead := 0
+	for {
+		time.Sleep(pollInterval)
+
+		m.mu.Lock()
+		_, tracked := m.instances[serverID]
+		m.mu.Unlock()
+		if !tracked {
+			return
+		}
+
+		srv, err := database.GetServer(serverID)
+		if err != nil {
+			return
+		}
+
+		if ServerAlive(srv.PID, srv.GamePort) {
+			consecutiveDead = 0
+			continue
+		}
+
+		consecutiveDead++
+		if consecutiveDead < deadThreshold {
+			continue
+		}
+		break
+	}
 
 	m.mu.Lock()
 	if inst, ok := m.instances[serverID]; ok {

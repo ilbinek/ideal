@@ -3,7 +3,6 @@ import * as React from "react";
 export function useServerLogs(serverId: number, enabled: boolean) {
   const [lines, setLines] = React.useState<string[]>([]);
   const [activePath, setActivePath] = React.useState("");
-  const bottomRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     if (!enabled || !serverId) return;
@@ -27,11 +26,7 @@ export function useServerLogs(serverId: number, enabled: boolean) {
     return () => source.close();
   }, [serverId, enabled]);
 
-  React.useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [lines]);
-
-  return { lines, activePath, bottomRef, text: lines.join("") };
+  return { lines, activePath, text: lines.join("") };
 }
 
 export function useBranchInstall() {

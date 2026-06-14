@@ -665,7 +665,9 @@ function ConfigTab({ serverId }: { serverId: number }) {
 }
 
 function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean }) {
-  const { text, bottomRef, activePath } = useServerLogs(serverId, isRunning);
+  const { text, activePath } = useServerLogs(serverId, isRunning);
+  const logRef = useRef<HTMLPreElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
   const logs = useQuery({
     queryKey: ["serverLogs", serverId],
     queryFn: () => api.listServerLogs(serverId),
@@ -673,6 +675,13 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   });
   const [selected, setSelected] = useState<string | null>(null);
   const [archived, setArchived] = useState("");
+
+  const viewerText = isRunning ? text || "Waiting for log output..." : archived || "Select a log file";
+
+  useEffect(() => {
+    if (!autoScroll || !logRef.current) return;
+    logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [viewerText, autoScroll]);
 
   const loadArchived = useCallback(async (name: string) => {
     setSelected(name);
@@ -713,21 +722,33 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
       </Card>
 
       <Card className="lg:col-span-2">
-        <CardHeader>
-          <CardTitle className="text-base">
-            {isRunning ? "Live tail" : selected ? selected : "Log viewer"}
-          </CardTitle>
-          {activePath && isRunning && (
-            <CardDescription className="truncate text-xs">
-              {activePath === "console" ? "Live server output" : activePath}
-            </CardDescription>
-          )}
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-base">
+              {isRunning ? "Live tail" : selected ? selected : "Log viewer"}
+            </CardTitle>
+            {activePath && isRunning && (
+              <CardDescription className="truncate text-xs">
+                {activePath === "console" ? "Live server output" : activePath}
+              </CardDescription>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(e) => setAutoScroll(e.target.checked)}
+            />
+            Auto-scroll
+          </label>
         </CardHeader>
         <CardContent>
-          <pre className="max-h-[500px] overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
-            {isRunning ? text || "Waiting for log output..." : archived || "Select a log file"}
+          <pre
+            ref={logRef}
+            className="max-h-[500px] overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap"
+          >
+            {viewerText}
           </pre>
-          <div ref={bottomRef} />
         </CardContent>
       </Card>
     </div>
