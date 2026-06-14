@@ -52,17 +52,18 @@ func ProvisionServer(serverID int) error {
 		}
 	}
 
-	// Symlink branch game files into instance
-	entries, err := os.ReadDir(branch.InstallPath)
+	// Symlink branch game files into instance (from steamapps/common/... when applicable)
+	gameDir := BranchGameDir(branch.InstallPath)
+	entries, err := os.ReadDir(gameDir)
 	if err != nil {
-		return fmt.Errorf("failed to read branch install: %w", err)
+		return fmt.Errorf("failed to read branch install at %s: %w", gameDir, err)
 	}
 	for _, entry := range entries {
 		name := entry.Name()
 		if instanceSkipEntries[name] {
 			continue
 		}
-		src := filepath.Join(branch.InstallPath, name)
+		src := filepath.Join(gameDir, name)
 		dst := filepath.Join(instanceDir, name)
 		if err := CreateSymlink(src, dst); err != nil {
 			log.Printf("[PROVISION] warning: failed to symlink %s: %v", name, err)

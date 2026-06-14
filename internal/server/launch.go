@@ -32,10 +32,11 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 	}
 
 	instanceDir := InstanceDir(srv.Slug)
-	binaryName, err := ServerBinaryName(branch.InstallPath)
-	if err != nil {
-		return nil, err
+	binaryRel, ok := FindServerBinary(branch.InstallPath)
+	if !ok {
+		return nil, fmt.Errorf("branch %q is not installed", branch.Name)
 	}
+	binaryName := filepath.Base(filepath.FromSlash(binaryRel))
 	binaryPath := filepath.Join(instanceDir, binaryName)
 
 	args := []string{

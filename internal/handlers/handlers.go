@@ -49,6 +49,7 @@ func APIHandler() http.Handler {
 	// Branches
 	mux.HandleFunc("GET /api/branches", apiAuth(GetBranchesHandler))
 	mux.HandleFunc("POST /api/branches", apiAuth(CreateBranchHandler))
+	mux.HandleFunc("DELETE /api/branches/{id}", apiAuth(DeleteBranchHandler))
 	mux.HandleFunc("POST /api/branches/{id}/install", apiAuth(InstallBranchHandler))
 	mux.HandleFunc("GET /api/branches/install/stream", apiAuth(BranchInstallStreamHandler))
 

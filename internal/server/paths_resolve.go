@@ -1,17 +1,8 @@
 package server
 
-import (
-	"path/filepath"
+import "arma3modmanager/internal/utils"
 
-	"arma3modmanager/internal/utils"
-)
-
-// ResolveInstallPath returns the absolute install directory for a branch.
-func ResolveInstallPath(storedPath string) string {
-	return utils.ResolveDataPath(storedPath)
-}
-
-// BranchInstallDir returns the canonical install path for a new branch slug.
+// BranchInstallDir returns the SteamCMD force_install_dir target for a branch slug.
 func BranchInstallDir(slug string) string {
-	return filepath.Join(utils.ResolveDataPath(BranchesBaseDir), slug)
+	return utils.BranchInstallPath(slug)
 }

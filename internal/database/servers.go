@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -117,7 +118,10 @@ func migrateServers() error {
 	if err := seedDefaultBranches(); err != nil {
 		return err
 	}
-	return fixPerformanceBranchCode()
+	if err := fixPerformanceBranchCode(); err != nil {
+		return err
+	}
+	return migrateBranchInstallPaths()
 }
 
 func fixPerformanceBranchCode() error {
@@ -125,6 +129,41 @@ func fixPerformanceBranchCode() error {
 		`UPDATE arma_branches SET steam_branch = 'profiling' WHERE name = 'Performance' AND steam_branch = 'performance'`,
 	)
 	return err
+}
+
+func migrateBranchInstallPaths() error {
+	rows, err := db.Query("SELECT id, name, install_path FROM arma_branches")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		var name, installPath string
+		if err := rows.Scan(&id, &name, &installPath); err != nil {
+			return err
+		}
+		slug := branchSlug(name, installPath)
+		newPath := utils.BranchInstallPath(slug)
+		if _, err := db.Exec("UPDATE arma_branches SET install_path = ? WHERE id = ?", newPath, id); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func branchSlug(name, installPath string) string {
+	switch name {
+	case "Main":
+		return "main"
+	case "Performance":
+		return "performance"
+	case "Creative Dev":
+		return "creativedev"
+	default:
+		return filepath.Base(filepath.Clean(installPath))
+	}
 }
 
 func seedDefaultBranches() error {
@@ -143,7 +182,7 @@ func seedDefaultBranches() error {
 		{"Creative Dev", "creativedev", "creativedev"},
 	}
 	for _, d := range defaults {
-		path := filepath.Join(utils.ResolveDataPath("./arma3/branches"), d.slug)
+		path := utils.BranchInstallPath(d.slug)
 		_, err := db.Exec(
 			"INSERT INTO arma_branches (name, steam_branch, install_path) VALUES (?, ?, ?)",
 			d.name, d.steamBranch, path,
@@ -195,6 +234,18 @@ func GetBranch(id int) (*ArmaBranch, error) {
 	}
 	b.InstallPath = utils.ResolveDataPath(b.InstallPath)
 	return &b, nil
+}
+
+func DeleteBranch(id int) error {
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM servers WHERE branch_id = ?", id).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("branch is used by %d server(s)", count)
+	}
+	_, err := db.Exec("DELETE FROM arma_branches WHERE id = ?", id)
+	return err
 }
 
 func CreateBranch(name, steamBranch, installPath string) (int64, error) {

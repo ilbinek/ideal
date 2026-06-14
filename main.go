@@ -27,6 +27,8 @@ func main() {
 
 	server.Init()
 
+	log.Printf("[IDEAL] data directory: %s", utils.DataRoot())
+
 	// Ensure addons directory exists
 	if err := utils.EnsureAddonsDirectory(); err != nil {
 		log.Fatal("Failed to create addons directory:", err)

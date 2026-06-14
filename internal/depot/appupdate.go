@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"arma3modmanager/internal/utils"
 )
 
 const DedicatedServerAppID = "233780"
@@ -80,7 +82,11 @@ func AppUpdate(opts AppUpdateOptions, progressChan chan<- ProgressUpdate) error 
 
 	if !installed {
 		abs, _ := filepath.Abs(opts.InstallDir)
+		gameDir := utils.DedicatedServerGameDir(opts.InstallDir)
 		msg := fmt.Sprintf("install finished but no server binary found in %s", abs)
+		if gameDir != abs {
+			msg += fmt.Sprintf(" (game dir checked: %s)", gameDir)
+		}
 		if alt := FindSteamCmdDedicatedServerDir(opts.SteamCmdPath); alt != "" {
 			msg += fmt.Sprintf("; check SteamCMD library at %s", alt)
 		}
@@ -137,47 +143,6 @@ func parseAppUpdateOutput(stdout, stderr io.Reader, progressChan chan<- Progress
 	return fail, success
 }
 
-var dedicatedServerBinaryNames = []string{
-	"arma3server_x64",
-	"arma3server_x64.exe",
-	"arma3server",
-	"arma3server.exe",
-}
-
-// dedicatedServerInstalled reports whether a SteamCMD install dir contains the server binary.
-func dedicatedServerInstalled(dir string) bool {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		abs = dir
-	}
-	if findDedicatedServerBinary(abs) != "" {
-		return true
-	}
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if findDedicatedServerBinary(filepath.Join(abs, e.Name())) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func findDedicatedServerBinary(dir string) string {
-	for _, name := range dedicatedServerBinaryNames {
-		p := filepath.Join(dir, name)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p
-		}
-	}
-	return ""
-}
-
 func formatSteamCmdArgs(args []string) string {
 	parts := make([]string, len(args))
 	for i, a := range args {
@@ -211,7 +176,7 @@ func FindSteamCmdDedicatedServerDir(steamCmdPath string) string {
 				continue
 			}
 			dir := filepath.Join(root, e.Name())
-			if findDedicatedServerBinary(dir) != "" {
+			if utils.DedicatedServerInstalled(dir) {
 				return dir
 			}
 		}

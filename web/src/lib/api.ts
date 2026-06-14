@@ -133,6 +133,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, steamBranch }),
     }),
+  deleteBranch: (id: number) =>
+    request<{ ok: boolean }>(`/api/branches/${id}`, { method: "DELETE" }),
   installBranch: (id: number) =>
     request<{ ok: boolean }>(`/api/branches/${id}/install`, { method: "POST" }),
 

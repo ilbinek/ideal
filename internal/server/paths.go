@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"arma3modmanager/internal/utils"
 )
 
 const (
@@ -29,7 +31,7 @@ func SlugFromName(name string) string {
 
 // InstanceDir returns the on-disk path for a server instance.
 func InstanceDir(slug string) string {
-	return filepath.Join(ServersBaseDir, slug)
+	return filepath.Join(utils.DataRoot(), "servers", slug)
 }
 
 // EnsureUniqueSlug appends a numeric suffix if the slug is taken.
@@ -73,53 +75,15 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// ServerBinaryNames lists known Arma dedicated server executable names.
-var ServerBinaryNames = []string{
-	"arma3server_x64",
-	"arma3server_x64.exe",
-	"arma3server",
-	"arma3server.exe",
-}
-
 // FindServerBinary locates the dedicated server executable under installPath.
 // Returns the path relative to installPath and whether it was found.
 func FindServerBinary(installPath string) (string, bool) {
-	abs, err := filepath.Abs(installPath)
-	if err != nil {
-		abs = installPath
-	}
-	if rel := findServerBinaryRel(abs, abs); rel != "" {
-		return rel, true
-	}
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		log.Printf("[BRANCH] install path not readable: %s (%v)", abs, err)
-		return "", false
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		sub := filepath.Join(abs, e.Name())
-		if rel := findServerBinaryRel(abs, sub); rel != "" {
-			return rel, true
-		}
-	}
-	return "", false
+	return utils.FindDedicatedServerBinaryRel(installPath)
 }
 
-func findServerBinaryRel(root, dir string) string {
-	for _, name := range ServerBinaryNames {
-		candidate := filepath.Join(dir, name)
-		if fileExists(candidate) {
-			rel, err := filepath.Rel(root, candidate)
-			if err != nil {
-				return name
-			}
-			return filepath.ToSlash(rel)
-		}
-	}
-	return ""
+// BranchGameDir returns the directory containing server binaries and game data.
+func BranchGameDir(installPath string) string {
+	return utils.DedicatedServerGameDir(installPath)
 }
 
 // SanitizeModLabel creates a safe symlink folder name.

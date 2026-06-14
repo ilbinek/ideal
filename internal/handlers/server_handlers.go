@@ -60,6 +60,31 @@ func CreateBranchHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
 }
 
+func DeleteBranchHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid branch id")
+		return
+	}
+	branch, err := database.GetBranch(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "branch not found")
+		return
+	}
+	if err := database.DeleteBranch(id); err != nil {
+		if strings.Contains(err.Error(), "used by") {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to delete branch")
+		return
+	}
+	if err := os.RemoveAll(branch.InstallPath); err != nil {
+		log.Printf("[BRANCH] failed to remove install dir %s: %v", branch.InstallPath, err)
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func InstallBranchHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
