@@ -28,7 +28,11 @@ func GetBranchesHandler(w http.ResponseWriter, r *http.Request) {
 		branches = []database.ArmaBranch{}
 	}
 	for i := range branches {
-		branches[i].Installed = server.IsBranchInstalled(branches[i].InstallPath)
+		installed := server.IsBranchInstalled(branches[i].InstallPath)
+		branches[i].Installed = installed
+		if installed {
+			_ = database.SetBranchInstalled(branches[i].ID, true)
+		}
 	}
 	writeJSON(w, http.StatusOK, branches)
 }
@@ -47,7 +51,7 @@ func CreateBranchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := server.SlugFromName(body.Name)
-	installPath := filepath.Join(server.BranchesBaseDir, slug)
+	installPath := server.BranchInstallDir(slug)
 	id, err := database.CreateBranch(body.Name, body.SteamBranch, installPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create branch")

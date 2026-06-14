@@ -132,30 +132,24 @@ func (b *BranchInstaller) runInstall(branchID int) {
 		b.setError(fmt.Sprintf("failed to create install dir: %v", err))
 		return
 	}
+	installDir, err := filepath.Abs(branch.InstallPath)
+	if err != nil {
+		installDir = branch.InstallPath
+	}
+	log.Printf("[BRANCH] installing branch %q (steam beta %q) to %s", branch.Name, branch.SteamBranch, installDir)
 
 	progressChan := make(chan depot.ProgressUpdate, 100)
+	installDone := make(chan error, 1)
 	go func() {
-		err := depot.AppUpdate(depot.AppUpdateOptions{
+		installDone <- depot.AppUpdate(depot.AppUpdateOptions{
 			AppID:        depot.DedicatedServerAppID,
 			SteamBranch:  branch.SteamBranch,
-			InstallDir:   branch.InstallPath,
+			InstallDir:   installDir,
 			Username:     config.Username,
 			Password:     config.Password,
 			SteamCmdPath: config.SteamCmdPath,
 		}, progressChan)
 		close(progressChan)
-		if err != nil {
-			b.setError(err.Error())
-			return
-		}
-		if err := database.SetBranchInstalled(branchID, true); err != nil {
-			log.Printf("[BRANCH] failed to update branch status: %v", err)
-		}
-		b.mu.Lock()
-		b.message = "Install complete"
-		b.percentage = 100
-		b.mu.Unlock()
-		b.broadcast()
 	}()
 
 	for update := range progressChan {
@@ -172,6 +166,32 @@ func (b *BranchInstaller) runInstall(branchID int) {
 		b.mu.Unlock()
 		b.broadcast()
 	}
+
+	installErr := <-installDone
+	installed := IsBranchInstalled(branch.InstallPath)
+
+	if installed {
+		if err := database.SetBranchInstalled(branchID, true); err != nil {
+			log.Printf("[BRANCH] failed to update branch status: %v", err)
+		}
+		b.mu.Lock()
+		b.message = "Install complete"
+		b.percentage = 100
+		b.errMsg = ""
+		b.mu.Unlock()
+		b.broadcast()
+		return
+	}
+
+	if installErr != nil {
+		b.setError(installErr.Error())
+		return
+	}
+	abs, _ := filepath.Abs(branch.InstallPath)
+	b.setError(fmt.Sprintf("install finished but server binary not found in %s", abs))
+	if alt := depot.FindSteamCmdDedicatedServerDir(config.SteamCmdPath); alt != "" {
+		log.Printf("[BRANCH] server files may have been downloaded to SteamCMD library: %s", alt)
+	}
 }
 
 func (b *BranchInstaller) setError(msg string) {
@@ -182,30 +202,19 @@ func (b *BranchInstaller) setError(msg string) {
 	b.broadcast()
 }
 
-// IsBranchInstalled checks if the branch has arma3server binary.
+// IsBranchInstalled checks if the branch has an arma3server binary.
 func IsBranchInstalled(installPath string) bool {
-	candidates := []string{
-		filepath.Join(installPath, "arma3server"),
-		filepath.Join(installPath, "arma3server_x64"),
-		filepath.Join(installPath, "arma3server_x64.exe"),
-	}
-	for _, c := range candidates {
-		if fileExists(c) {
-			return true
-		}
-	}
-	return false
+	_, ok := FindServerBinary(installPath)
+	return ok
 }
 
 // ServerBinaryName returns the server executable name for the branch install.
 func ServerBinaryName(installPath string) (string, error) {
-	candidates := []string{"arma3server", "arma3server_x64", "arma3server_x64.exe"}
-	for _, name := range candidates {
-		if fileExists(filepath.Join(installPath, name)) {
-			return name, nil
-		}
+	if name, ok := FindServerBinary(installPath); ok {
+		return name, nil
 	}
-	return "", fmt.Errorf("no server binary found in %s", installPath)
+	abs, _ := filepath.Abs(installPath)
+	return "", fmt.Errorf("no server binary found in %s", abs)
 }
 
 // instanceSkipEntries are never symlinked from branch into instance.

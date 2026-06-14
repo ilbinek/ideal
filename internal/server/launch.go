@@ -59,7 +59,7 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 		args = append(args, strings.Fields(extra)...)
 	}
 
-	cmdParts := append([]string{"./" + binaryName}, args...)
+	cmdParts := append([]string{"./" + filepath.ToSlash(binaryName)}, args...)
 	return &LaunchArgs{
 		Command:        strings.Join(cmdParts, " "),
 		ModParam:       modParam,

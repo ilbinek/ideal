@@ -73,6 +73,55 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
+// ServerBinaryNames lists known Arma dedicated server executable names.
+var ServerBinaryNames = []string{
+	"arma3server_x64",
+	"arma3server_x64.exe",
+	"arma3server",
+	"arma3server.exe",
+}
+
+// FindServerBinary locates the dedicated server executable under installPath.
+// Returns the path relative to installPath and whether it was found.
+func FindServerBinary(installPath string) (string, bool) {
+	abs, err := filepath.Abs(installPath)
+	if err != nil {
+		abs = installPath
+	}
+	if rel := findServerBinaryRel(abs, abs); rel != "" {
+		return rel, true
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		log.Printf("[BRANCH] install path not readable: %s (%v)", abs, err)
+		return "", false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		sub := filepath.Join(abs, e.Name())
+		if rel := findServerBinaryRel(abs, sub); rel != "" {
+			return rel, true
+		}
+	}
+	return "", false
+}
+
+func findServerBinaryRel(root, dir string) string {
+	for _, name := range ServerBinaryNames {
+		candidate := filepath.Join(dir, name)
+		if fileExists(candidate) {
+			rel, err := filepath.Rel(root, candidate)
+			if err != nil {
+				return name
+			}
+			return filepath.ToSlash(rel)
+		}
+	}
+	return ""
+}
+
 // SanitizeModLabel creates a safe symlink folder name.
 func SanitizeModLabel(label string) string {
 	s := strings.TrimSpace(label)

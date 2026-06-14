@@ -2,8 +2,11 @@ package database
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"arma3modmanager/internal/utils"
 )
 
 const (
@@ -111,7 +114,17 @@ func migrateServers() error {
 			return err
 		}
 	}
-	return seedDefaultBranches()
+	if err := seedDefaultBranches(); err != nil {
+		return err
+	}
+	return fixPerformanceBranchCode()
+}
+
+func fixPerformanceBranchCode() error {
+	_, err := db.Exec(
+		`UPDATE arma_branches SET steam_branch = 'profiling' WHERE name = 'Performance' AND steam_branch = 'performance'`,
+	)
+	return err
 }
 
 func seedDefaultBranches() error {
@@ -126,11 +139,11 @@ func seedDefaultBranches() error {
 		name, steamBranch, slug string
 	}{
 		{"Main", "", "main"},
-		{"Performance", "performance", "performance"},
+		{"Performance", "profiling", "performance"},
 		{"Creative Dev", "creativedev", "creativedev"},
 	}
 	for _, d := range defaults {
-		path := "./arma3/branches/" + d.slug
+		path := filepath.Join(utils.ResolveDataPath("./arma3/branches"), d.slug)
 		_, err := db.Exec(
 			"INSERT INTO arma_branches (name, steam_branch, install_path) VALUES (?, ?, ?)",
 			d.name, d.steamBranch, path,
@@ -161,6 +174,7 @@ func GetBranches() ([]ArmaBranch, error) {
 		if lastUpdated != "" {
 			b.LastUpdated, _ = time.Parse("2006-01-02 15:04:05", lastUpdated)
 		}
+		b.InstallPath = utils.ResolveDataPath(b.InstallPath)
 		branches = append(branches, b)
 	}
 	return branches, rows.Err()
@@ -179,6 +193,7 @@ func GetBranch(id int) (*ArmaBranch, error) {
 	if lastUpdated.Valid {
 		b.LastUpdated = lastUpdated.Time
 	}
+	b.InstallPath = utils.ResolveDataPath(b.InstallPath)
 	return &b, nil
 }
 

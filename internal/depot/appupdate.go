@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -38,6 +40,8 @@ func AppUpdate(opts AppUpdateOptions, progressChan chan<- ProgressUpdate) error 
 	}
 	args = append(args, "validate", "+quit")
 
+	log.Printf("[STEAMCMD] command: %s %s", exeName, formatSteamCmdArgs(args))
+
 	cmd := exec.Command(exeName, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -52,7 +56,7 @@ func AppUpdate(opts AppUpdateOptions, progressChan chan<- ProgressUpdate) error 
 		return fmt.Errorf("failed to start steamcmd: %w", err)
 	}
 
-	failMsg := parseAppUpdateOutput(stdout, stderr, progressChan)
+	failMsg, success := parseAppUpdateOutput(stdout, stderr, progressChan)
 	waitErr := cmd.Wait()
 
 	if failMsg != "" {
@@ -61,11 +65,29 @@ func AppUpdate(opts AppUpdateOptions, progressChan chan<- ProgressUpdate) error 
 		}
 		return fmt.Errorf("steamcmd app update failed: %s", failMsg)
 	}
-	if waitErr != nil {
+
+	// SteamCMD often exits non-zero even after a successful install.
+	installed := dedicatedServerInstalled(opts.InstallDir)
+	if waitErr != nil && !success && !installed {
 		if progressChan != nil {
 			progressChan <- ProgressUpdate{Stage: "error", Message: waitErr.Error()}
 		}
 		return fmt.Errorf("steamcmd exited with error: %w", waitErr)
+	}
+	if waitErr != nil && (success || installed) {
+		log.Printf("[STEAMCMD] app_update finished (exit %v) — treating as success", waitErr)
+	}
+
+	if !installed {
+		abs, _ := filepath.Abs(opts.InstallDir)
+		msg := fmt.Sprintf("install finished but no server binary found in %s", abs)
+		if alt := FindSteamCmdDedicatedServerDir(opts.SteamCmdPath); alt != "" {
+			msg += fmt.Sprintf("; check SteamCMD library at %s", alt)
+		}
+		if progressChan != nil {
+			progressChan <- ProgressUpdate{Stage: "error", Message: msg}
+		}
+		return fmt.Errorf(msg)
 	}
 
 	if progressChan != nil {
@@ -74,7 +96,7 @@ func AppUpdate(opts AppUpdateOptions, progressChan chan<- ProgressUpdate) error 
 	return nil
 }
 
-func parseAppUpdateOutput(stdout, stderr io.Reader, progressChan chan<- ProgressUpdate) string {
+func parseAppUpdateOutput(stdout, stderr io.Reader, progressChan chan<- ProgressUpdate) (failMsg string, success bool) {
 	scanner := bufio.NewScanner(io.MultiReader(stdout, stderr))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -84,7 +106,7 @@ func parseAppUpdateOutput(stdout, stderr io.Reader, progressChan chan<- Progress
 		}
 	}
 
-	var failMsg string
+	var fail string
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -104,12 +126,95 @@ func parseAppUpdateOutput(stdout, stderr io.Reader, progressChan chan<- Progress
 		case strings.Contains(line, "Update state") && strings.Contains(line, "validating"):
 			send(ProgressUpdate{Stage: "downloading", Message: "Validating...", Percentage: 80})
 		case strings.Contains(line, "Success! App '"):
+			success = true
 			send(ProgressUpdate{Stage: "downloading", Message: "Finalizing...", Percentage: 95})
 		case strings.Contains(line, "ERROR!"):
-			failMsg = line
+			fail = line
 		case strings.Contains(line, "FAILED login") || strings.Contains(line, "Login Failure"):
-			failMsg = line
+			fail = line
 		}
 	}
-	return failMsg
+	return fail, success
+}
+
+var dedicatedServerBinaryNames = []string{
+	"arma3server_x64",
+	"arma3server_x64.exe",
+	"arma3server",
+	"arma3server.exe",
+}
+
+// dedicatedServerInstalled reports whether a SteamCMD install dir contains the server binary.
+func dedicatedServerInstalled(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	if findDedicatedServerBinary(abs) != "" {
+		return true
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if findDedicatedServerBinary(filepath.Join(abs, e.Name())) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func findDedicatedServerBinary(dir string) string {
+	for _, name := range dedicatedServerBinaryNames {
+		p := filepath.Join(dir, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+func formatSteamCmdArgs(args []string) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		if i > 0 && args[i-1] == "+login" {
+			parts[i] = "***"
+			continue
+		}
+		if i > 1 && args[i-2] == "+login" {
+			parts[i] = "***"
+			continue
+		}
+		parts[i] = a
+	}
+	return strings.Join(parts, " ")
+}
+
+// FindSteamCmdDedicatedServerDir returns the most likely SteamCMD steamapps/common
+// install folder when force_install_dir did not receive the game files.
+func FindSteamCmdDedicatedServerDir(steamCmdPath string) string {
+	var roots []string
+	if steamCmdPath != "" && (filepath.IsAbs(steamCmdPath) || strings.Contains(steamCmdPath, string(os.PathSeparator))) {
+		roots = append(roots, filepath.Join(filepath.Dir(steamCmdPath), "steamapps", "common"))
+	}
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			dir := filepath.Join(root, e.Name())
+			if findDedicatedServerBinary(dir) != "" {
+				return dir
+			}
+		}
+	}
+	return ""
 }
