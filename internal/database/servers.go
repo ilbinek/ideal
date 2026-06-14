@@ -136,21 +136,38 @@ func migrateBranchInstallPaths() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
+	type branchRow struct {
+		id                int
+		name, installPath string
+	}
+	var branches []branchRow
 	for rows.Next() {
-		var id int
-		var name, installPath string
-		if err := rows.Scan(&id, &name, &installPath); err != nil {
+		var b branchRow
+		if err := rows.Scan(&b.id, &b.name, &b.installPath); err != nil {
+			rows.Close()
 			return err
 		}
-		slug := branchSlug(name, installPath)
+		branches = append(branches, b)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, b := range branches {
+		slug := branchSlug(b.name, b.installPath)
 		newPath := utils.BranchInstallPath(slug)
-		if _, err := db.Exec("UPDATE arma_branches SET install_path = ? WHERE id = ?", newPath, id); err != nil {
+		if filepath.Clean(utils.ResolveDataPath(b.installPath)) == filepath.Clean(newPath) {
+			continue
+		}
+		if _, err := db.Exec("UPDATE arma_branches SET install_path = ? WHERE id = ?", newPath, b.id); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func branchSlug(name, installPath string) string {

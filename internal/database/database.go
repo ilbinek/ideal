@@ -2,8 +2,11 @@ package database
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"arma3modmanager/internal/utils"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -38,11 +41,14 @@ type Mod struct {
 }
 
 func Init() error {
+	dbPath := filepath.Join(utils.DataRoot(), "arma3mods.db")
+	dsn := dbPath + "?_busy_timeout=10000&_journal_mode=WAL"
 	var err error
-	db, err = sql.Open("sqlite3", "./arma3mods.db")
+	db, err = sql.Open("sqlite3", dsn)
 	if err != nil {
 		return err
 	}
+	db.SetMaxOpenConns(1)
 
 	// Create tables
 	schema := `

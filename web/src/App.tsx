@@ -39,12 +39,12 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     setUnauthorizedHandler(() => navigate("/login"));
   }, [navigate]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetched } = useQuery({
     queryKey: ["session"],
     queryFn: () => api.session(),
   });
 
-  if (isLoading) return <FullScreenSpinner />;
+  if (isLoading || !isFetched) return <FullScreenSpinner />;
   if (!data?.authenticated) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
