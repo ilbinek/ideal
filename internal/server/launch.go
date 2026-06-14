@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -60,7 +59,7 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 		args = append(args, strings.Fields(extra)...)
 	}
 
-	cmdParts := append([]string{"./" + filepath.ToSlash(binaryName)}, args...)
+	cmdParts := append([]string{"./" + filepath.ToSlash(binaryName)}, formatCommandArgs(args)...)
 	return &LaunchArgs{
 		Command:        strings.Join(cmdParts, " "),
 		ModParam:       modParam,
@@ -81,27 +80,12 @@ func buildModParams(instanceDir string, serverID int) (modParam, serverModParam 
 	var clientMods, serverModsList []string
 
 	for _, sm := range serverMods {
-		label := sm.Label
-		if sm.ModID != nil {
-			mod, err := database.GetMod(*sm.ModID)
-			if err != nil || !mod.Downloaded || mod.LocalPath == "" {
-				continue
-			}
-			if label == "" {
-				label = mod.Name
-			}
-		} else if sm.CustomPath != "" {
-			if _, err := os.Stat(sm.CustomPath); err != nil {
-				continue
-			}
-			if label == "" {
-				label = filepath.Base(sm.CustomPath)
-			}
-		} else {
+		linkName, _, ok := ModLinkName(sm)
+		if !ok {
 			continue
 		}
 
-		linkName := uniqueLinkName(SanitizeModLabel(label), usedNames)
+		linkName = uniqueLinkName(linkName, usedNames)
 		if sm.IsServerMod {
 			serverModsList = append(serverModsList, "servermods/"+linkName)
 		} else {
@@ -110,4 +94,20 @@ func buildModParams(instanceDir string, serverID int) (modParam, serverModParam 
 	}
 
 	return strings.Join(clientMods, ";"), strings.Join(serverModsList, ";")
+}
+
+// formatCommandArgs quotes mod path lists for display; exec still uses raw args.
+func formatCommandArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "-mod=") || strings.HasPrefix(arg, "-serverMod=") {
+			prefix, val, ok := strings.Cut(arg, "=")
+			if ok && val != "" {
+				out[i] = prefix + "=\"" + val + "\""
+				continue
+			}
+		}
+		out[i] = arg
+	}
+	return out
 }

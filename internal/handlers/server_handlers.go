@@ -241,9 +241,13 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update server")
 		return
 	}
-	if modsetChanged && body.ModsetID != nil {
-		if err := database.SeedServerModsFromModset(id, *body.ModsetID); err != nil {
-			log.Printf("[SERVER] failed to seed mods from modset: %v", err)
+	if modsetChanged {
+		if body.ModsetID != nil {
+			if err := database.SeedServerModsFromModset(id, *body.ModsetID); err != nil {
+				log.Printf("[SERVER] failed to seed mods from modset: %v", err)
+			}
+		} else if err := database.ReplaceServerMods(id, []database.ServerMod{}); err != nil {
+			log.Printf("[SERVER] failed to clear mods after modset removal: %v", err)
 		}
 		if err := server.ProvisionServer(id); err != nil {
 			log.Printf("[SERVER] provision after modset update: %v", err)

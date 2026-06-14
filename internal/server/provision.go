@@ -96,39 +96,23 @@ func provisionMods(instanceDir string, serverID int) error {
 
 	usedNames := make(map[string]int)
 	for _, sm := range serverMods {
-		var srcPath string
-		label := sm.Label
-
-		if sm.ModID != nil {
-			mod, err := database.GetMod(*sm.ModID)
-			if err != nil || !mod.Downloaded || mod.LocalPath == "" {
+		linkName, srcPath, ok := ModLinkName(sm)
+		if !ok {
+			if sm.ModID != nil {
 				log.Printf("[PROVISION] skipping mod %d: not downloaded", *sm.ModID)
-				continue
+			} else if sm.CustomPath != "" {
+				log.Printf("[PROVISION] skipping custom mod %s", sm.CustomPath)
 			}
-			srcPath = mod.LocalPath
-			if label == "" {
-				label = mod.Name
-			}
-		} else if sm.CustomPath != "" {
-			if err := ValidateCustomModPath(sm.CustomPath); err != nil {
-				log.Printf("[PROVISION] skipping custom mod %s: %v", sm.CustomPath, err)
-				continue
-			}
-			srcPath = sm.CustomPath
-			if label == "" {
-				label = filepath.Base(sm.CustomPath)
-			}
-		} else {
 			continue
 		}
 
-		linkName := uniqueLinkName(SanitizeModLabel(label), usedNames)
+		linkName = uniqueLinkName(linkName, usedNames)
 		destDir := modsDir
 		if sm.IsServerMod {
 			destDir = serverModsDir
 		}
 		if err := CreateSymlink(srcPath, filepath.Join(destDir, linkName)); err != nil {
-			return fmt.Errorf("failed to symlink mod %s: %w", label, err)
+			return fmt.Errorf("failed to symlink mod %s: %w", linkName, err)
 		}
 	}
 	return nil

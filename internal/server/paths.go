@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/utils"
 )
 
@@ -102,6 +103,29 @@ func SanitizeModLabel(label string) string {
 	s = strings.ReplaceAll(s, ">", "-")
 	s = strings.ReplaceAll(s, "|", "-")
 	return strings.ToLower(s)
+}
+
+// ModLinkName returns the symlink folder name and source path for a server mod entry.
+// Managed mods use the Steam Workshop ID; custom mods use the folder basename.
+func ModLinkName(sm database.ServerMod) (linkName, srcPath string, ok bool) {
+	if sm.ModID != nil {
+		mod, err := database.GetMod(*sm.ModID)
+		if err != nil || !mod.Downloaded || mod.LocalPath == "" {
+			return "", "", false
+		}
+		linkName = mod.WorkshopID
+		if linkName == "" {
+			linkName = filepath.Base(mod.LocalPath)
+		}
+		return linkName, mod.LocalPath, true
+	}
+	if sm.CustomPath != "" {
+		if err := ValidateCustomModPath(sm.CustomPath); err != nil {
+			return "", "", false
+		}
+		return filepath.Base(sm.CustomPath), sm.CustomPath, true
+	}
+	return "", "", false
 }
 
 // DefaultServerCfg returns a minimal server.cfg template.
