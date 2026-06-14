@@ -353,12 +353,12 @@ func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, stea
 	return result.LastInsertId()
 }
 
-func UpdateServer(id int, name string, branchID int, gamePort, steamPort int, profileName, extraLaunchParams string) error {
+func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, extraLaunchParams string) error {
 	_, err := db.Exec(`
-		UPDATE servers SET name = ?, branch_id = ?, game_port = ?, steam_port = ?,
+		UPDATE servers SET name = ?, branch_id = ?, modset_id = ?, game_port = ?, steam_port = ?,
 			profile_name = ?, extra_launch_params = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`,
-		name, branchID, gamePort, steamPort, profileName, extraLaunchParams, id,
+		name, branchID, modsetID, gamePort, steamPort, profileName, extraLaunchParams, id,
 	)
 	return err
 }

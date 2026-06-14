@@ -152,6 +152,19 @@ func provisionKeys(instanceDir string, serverID int) error {
 		return err
 	}
 
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return err
+	}
+	branch, err := database.GetBranch(srv.BranchID)
+	if err != nil {
+		return err
+	}
+	branchKeysDir := filepath.Join(BranchGameDir(branch.InstallPath), "keys")
+	if err := utils.CopyBikeysFromDir(branchKeysDir, keysDir); err != nil {
+		log.Printf("[PROVISION] warning: failed to copy branch keys from %s: %v", branchKeysDir, err)
+	}
+
 	serverMods, err := database.GetServerMods(serverID)
 	if err != nil {
 		return err

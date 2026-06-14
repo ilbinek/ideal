@@ -47,6 +47,33 @@ func CopyFile(src, dst string) error {
 	return err
 }
 
+// CopyBikeysFromDir copies top-level .bikey files from srcDir into destDir.
+func CopyBikeysFromDir(srcDir, destDir string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".bikey") {
+			continue
+		}
+		if err := CopyFile(filepath.Join(srcDir, name), filepath.Join(destDir, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ExtractKeys copies all .bikey files from mod directories to a keys directory
 func ExtractKeys(modPaths []string, keysDir string) error {
 	// Create keys directory

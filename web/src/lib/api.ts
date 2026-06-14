@@ -158,6 +158,7 @@ export const api = {
     body: {
       name: string;
       branchId: number;
+      modsetId?: number | null;
       gamePort: number;
       steamPort: number;
       profileName: string;

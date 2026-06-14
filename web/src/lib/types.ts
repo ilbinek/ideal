@@ -108,6 +108,7 @@ export interface ServerKey {
 }
 
 export interface ServerKeysResponse {
+  base: string[];
   custom: ServerKey[];
   auto: string[];
 }

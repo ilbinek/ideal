@@ -178,6 +178,7 @@ function OverviewTab({
   srv: {
     name: string;
     branchId: number;
+    modsetId?: number;
     gamePort: number;
     steamPort: number;
     profileName: string;
@@ -186,6 +187,7 @@ function OverviewTab({
 }) {
   const queryClient = useQueryClient();
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
+  const modsets = useQuery({ queryKey: ["modsets"], queryFn: () => api.getModsets() });
   const launch = useQuery({
     queryKey: ["launch", serverId],
     queryFn: () => api.getLaunchPreview(serverId),
@@ -193,22 +195,33 @@ function OverviewTab({
 
   const [name, setName] = useState(srv.name);
   const [branchId, setBranchId] = useState(String(srv.branchId));
+  const [modsetId, setModsetId] = useState(srv.modsetId ? String(srv.modsetId) : "none");
   const [gamePort, setGamePort] = useState(String(srv.gamePort));
   const [steamPort, setSteamPort] = useState(String(srv.steamPort));
   const [profileName, setProfileName] = useState(srv.profileName);
   const [extra, setExtra] = useState(srv.extraLaunchParams);
+
+  useEffect(() => {
+    setModsetId(srv.modsetId ? String(srv.modsetId) : "none");
+  }, [srv.modsetId]);
 
   const save = useMutation({
     mutationFn: () =>
       api.updateServer(serverId, {
         name,
         branchId: parseInt(branchId, 10),
+        modsetId: modsetId !== "none" ? parseInt(modsetId, 10) : null,
         gamePort: parseInt(gamePort, 10),
         steamPort: parseInt(steamPort, 10),
         profileName,
         extraLaunchParams: extra,
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["servers", serverId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+    },
   });
 
   const provision = useMutation({
@@ -239,6 +252,24 @@ function OverviewTab({
                 </option>
               ))}
             </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label>Modset</Label>
+            <select
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={modsetId}
+              onChange={(e) => setModsetId(e.target.value)}
+            >
+              <option value="none">None</option>
+              {modsets.data?.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Changing the modset reloads mods and keys from that modset on save.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1">
@@ -318,6 +349,7 @@ function ModsTab({ serverId }: { serverId: number }) {
     mutationFn: () => api.putServerMods(serverId, mods),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
       queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
     },
   });
@@ -449,6 +481,10 @@ function KeysTab({ serverId }: { serverId: number }) {
   });
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const baseKeys = keys.data?.base ?? [];
+  const modKeys = keys.data?.auto ?? [];
+  const customKeys = keys.data?.custom ?? [];
+
   const upload = useMutation({
     mutationFn: (file: File) => api.uploadServerKey(serverId, file),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] }),
@@ -463,18 +499,20 @@ function KeysTab({ serverId }: { serverId: number }) {
     <div className="grid gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Auto-extracted keys</CardTitle>
-          <CardDescription>From configured mods (read-only).</CardDescription>
+          <CardTitle className="text-base">Base game keys</CardTitle>
+          <CardDescription>From the branch install (includes a3.bikey).</CardDescription>
         </CardHeader>
         <CardContent>
           <ul className="text-sm">
-            {keys.data?.auto.map((k) => (
+            {baseKeys.map((k) => (
               <li key={k} className="text-muted-foreground">
                 {k}
               </li>
             ))}
-            {!keys.data?.auto.length && (
-              <li className="text-muted-foreground">None yet — save mods and provision.</li>
+            {!baseKeys.length && (
+              <li className="text-muted-foreground">
+                None yet — re-provision after the branch is installed.
+              </li>
             )}
           </ul>
         </CardContent>
@@ -482,8 +520,27 @@ function KeysTab({ serverId }: { serverId: number }) {
 
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Mod keys</CardTitle>
+          <CardDescription>Auto-extracted from configured mods (read-only).</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="text-sm">
+            {modKeys.map((k) => (
+              <li key={k} className="text-muted-foreground">
+                {k}
+              </li>
+            ))}
+            {!modKeys.length && (
+              <li className="text-muted-foreground">None yet — save mods and provision.</li>
+            )}
+          </ul>
+        </CardContent>
+      </Card>
+
+      <Card className="lg:col-span-2">
+        <CardHeader>
           <CardTitle className="text-base">Custom keys</CardTitle>
-          <CardDescription>Always loaded in addition to mod keys.</CardDescription>
+          <CardDescription>Always loaded in addition to base and mod keys.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <input
@@ -501,7 +558,7 @@ function KeysTab({ serverId }: { serverId: number }) {
             <Upload className="size-3.5" /> Upload .bikey
           </Button>
           <ul className="text-sm">
-            {keys.data?.custom.map((k) => (
+            {customKeys.map((k) => (
               <li key={k.id} className="flex items-center justify-between gap-2">
                 <span>{k.filename}</span>
                 <Button

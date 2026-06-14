@@ -221,6 +221,7 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name              string `json:"name"`
 		BranchID          int    `json:"branchId"`
+		ModsetID          *int   `json:"modsetId"`
 		GamePort          int    `json:"gamePort"`
 		SteamPort         int    `json:"steamPort"`
 		ProfileName       string `json:"profileName"`
@@ -230,11 +231,35 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := database.UpdateServer(id, body.Name, body.BranchID, body.GamePort, body.SteamPort, body.ProfileName, body.ExtraLaunchParams); err != nil {
+	existing, err := database.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	modsetChanged := !modsetIDsEqual(existing.ModsetID, body.ModsetID)
+	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ExtraLaunchParams); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update server")
 		return
 	}
+	if modsetChanged && body.ModsetID != nil {
+		if err := database.SeedServerModsFromModset(id, *body.ModsetID); err != nil {
+			log.Printf("[SERVER] failed to seed mods from modset: %v", err)
+		}
+		if err := server.ProvisionServer(id); err != nil {
+			log.Printf("[SERVER] provision after modset update: %v", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func modsetIDsEqual(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func DeleteServerHandler(w http.ResponseWriter, r *http.Request) {
@@ -451,15 +476,24 @@ func GetServerKeysHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid server id")
 		return
 	}
-	customKeys, err := database.GetServerKeys(id)
+	baseKeys, modKeys, customKeys, err := server.ServerKeysPreview(id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to fetch keys")
+		writeError(w, http.StatusInternalServerError, "failed to list keys")
 		return
 	}
-	autoKeys, _ := server.AutoKeysFromMods(id)
+	if baseKeys == nil {
+		baseKeys = []string{}
+	}
+	if modKeys == nil {
+		modKeys = []string{}
+	}
+	if customKeys == nil {
+		customKeys = []database.ServerKey{}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"base":   baseKeys,
+		"auto":   modKeys,
 		"custom": customKeys,
-		"auto":   autoKeys,
 	})
 }
 

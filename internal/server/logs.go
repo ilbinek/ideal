@@ -258,39 +258,68 @@ func WriteConfigFile(slug, name, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-// AutoKeysFromMods lists bikey filenames extracted from server mods (read-only preview).
-func AutoKeysFromMods(serverID int) ([]string, error) {
-	instanceDir := ""
+// ServerKeysPreview lists keys in the server instance grouped by source.
+func ServerKeysPreview(serverID int) (base, modKeys []string, custom []database.ServerKey, err error) {
 	srv, err := database.GetServer(serverID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	instanceDir = filepath.Join(InstanceDir(srv.Slug), "keys")
 
-	entries, err := os.ReadDir(instanceDir)
+	custom, err = database.GetServerKeys(serverID)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
+		return nil, nil, nil, err
+	}
+	if custom == nil {
+		custom = []database.ServerKey{}
 	}
 
-	customKeys, _ := database.GetServerKeys(serverID)
-	customSet := make(map[string]bool)
-	for _, k := range customKeys {
+	customSet := make(map[string]bool, len(custom))
+	for _, k := range custom {
 		customSet[k.Filename] = true
 	}
 
-	var autoKeys []string
+	branchKeySet := make(map[string]bool)
+	branch, err := database.GetBranch(srv.BranchID)
+	if err == nil {
+		branchKeysDir := filepath.Join(BranchGameDir(branch.InstallPath), "keys")
+		entries, readErr := os.ReadDir(branchKeysDir)
+		if readErr == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				name := e.Name()
+				if strings.HasSuffix(strings.ToLower(name), ".bikey") {
+					branchKeySet[name] = true
+				}
+			}
+		}
+	}
+
+	instanceKeysDir := filepath.Join(InstanceDir(srv.Slug), "keys")
+	entries, err := os.ReadDir(instanceKeysDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, custom, nil
+		}
+		return nil, nil, nil, err
+	}
+
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if strings.HasSuffix(strings.ToLower(name), ".bikey") && !customSet[name] {
-			autoKeys = append(autoKeys, name)
+		if !strings.HasSuffix(strings.ToLower(name), ".bikey") || customSet[name] {
+			continue
+		}
+		if branchKeySet[name] {
+			base = append(base, name)
+		} else {
+			modKeys = append(modKeys, name)
 		}
 	}
-	sort.Strings(autoKeys)
-	return autoKeys, nil
+	sort.Strings(base)
+	sort.Strings(modKeys)
+	return base, modKeys, custom, nil
 }
