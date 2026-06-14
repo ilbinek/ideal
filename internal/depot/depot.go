@@ -19,11 +19,11 @@ const (
 
 // ProgressUpdate represents a download progress update
 type ProgressUpdate struct {
-	Stage      string  // "connecting", "logging_in", "downloading", "complete", "error"
-	Message    string  // Human-readable message
-	Percentage float64 // Download percentage (0-100)
-	FileName   string  // Current file being downloaded
-	Error      error   // Error if any
+	Stage      string  `json:"stage"`      // "connecting", "logging_in", "downloading", "complete", "error"
+	Message    string  `json:"message"`    // Human-readable message
+	Percentage float64 `json:"percentage"` // Download percentage (0-100)
+	FileName   string  `json:"fileName"`   // Current file being downloaded
+	Error      error   `json:"-"`          // Error if any (not serialized; surfaced via Message)
 }
 
 // DownloadMod downloads a mod using DepotDownloader

@@ -10,27 +10,27 @@ import (
 var db *sql.DB
 
 type Config struct {
-	ID       int
-	Username string
-	Password string
-	ApiKey   string
+	ID       int    `json:"id"`
+	Username string `json:"username"`
+	Password string `json:"-"`
+	ApiKey   string `json:"apiKey"`
 }
 
 type Modset struct {
-	ID        int
-	Name      string
-	CreatedAt time.Time
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type Mod struct {
-	ID              int
-	WorkshopID      string
-	Name            string
-	Downloaded      bool
-	LocalPath       string
-	LastUpdated     time.Time
-	LastChecked     time.Time
-	UpdateAvailable bool
+	ID              int       `json:"id"`
+	WorkshopID      string    `json:"workshopId"`
+	Name            string    `json:"name"`
+	Downloaded      bool      `json:"downloaded"`
+	LocalPath       string    `json:"localPath"`
+	LastUpdated     time.Time `json:"lastUpdated"`
+	LastChecked     time.Time `json:"lastChecked"`
+	UpdateAvailable bool      `json:"updateAvailable"`
 }
 
 func Init() error {

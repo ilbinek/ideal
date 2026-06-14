@@ -1,10 +1,24 @@
 # Arma 3 Mod Manager - Binaries and artifacts
 arma3modmanager
 arma3modmanager.exe
+ideal
+ideal.exe
+ideal-*
 *.exe
 *.dll
 *.so
 *.dylib
+
+# Frontend (Vite/React)
+web/node_modules/
+web/dist/
+*.err
+
+# Build output (distribution binaries)
+/dist/
+
+# Task runner cache
+.task/
 
 # Database
 *.db

@@ -1,0 +1,89 @@
+version: "3"
+
+vars:
+  BINARY: ideal
+  WEB_DIR: web
+  DIST_DIR: dist
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  install:
+    desc: Install Go and frontend dependencies
+    cmds:
+      - go mod download
+      - npm --prefix {{.WEB_DIR}} ci
+
+  web:dev:
+    desc: Run the Vite dev server (proxies /api to the Go server on :8080)
+    dir: "{{.WEB_DIR}}"
+    cmds:
+      - npm run dev
+
+  web:build:
+    desc: Build the React SPA into web/dist (embedded by the Go binary)
+    dir: "{{.WEB_DIR}}"
+    cmds:
+      - npm ci
+      - npm run build
+    sources:
+      - src/**/*
+      - index.html
+      - package.json
+      - package-lock.json
+      - vite.config.ts
+      - tsconfig.json
+    generates:
+      - dist/**/*
+
+  dev:
+    desc: Run the Go API/server (bind loopback to avoid firewall prompts)
+    env:
+      IDEAL_LISTEN: 127.0.0.1:8080
+    cmds:
+      - go run .
+
+  mkdist:
+    internal: true
+    cmds:
+      - cmd: mkdir -p {{.DIST_DIR}}
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -Command "New-Item -ItemType Directory -Force '{{.DIST_DIR}}' | Out-Null"
+        platforms: [windows]
+
+  build:
+    desc: Build the self-contained binary for the host platform into dist/
+    deps:
+      - web:build
+      - mkdist
+    cmds:
+      - go build -o {{.DIST_DIR}}/{{.BINARY}}{{exeExt}} .
+
+  build:all:
+    desc: Cross-compile release binaries for all target platforms into dist/
+    deps:
+      - web:build
+      - mkdist
+    cmds:
+      # Task's built-in shell supports inline VAR=val assignments on every
+      # platform, so no external `env` binary is needed (it doesn't exist on
+      # Windows).
+      - for: { matrix: { OS: ["linux", "windows"], ARCH: ["amd64", "arm64"] } }
+        cmd: GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -o {{.DIST_DIR}}/{{.BINARY}}-{{.ITEM.OS}}-{{.ITEM.ARCH}}{{if eq .ITEM.OS "windows"}}.exe{{end}} .
+
+  lint:
+    desc: Vet Go code and type-check the frontend
+    cmds:
+      - go vet ./...
+      - npm --prefix {{.WEB_DIR}} run typecheck
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - cmd: rm -rf {{.WEB_DIR}}/dist {{.DIST_DIR}}
+        platforms: [linux, darwin]
+      - cmd: powershell -NoProfile -Command "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue '{{.WEB_DIR}}/dist','{{.DIST_DIR}}'"
+        platforms: [windows]
