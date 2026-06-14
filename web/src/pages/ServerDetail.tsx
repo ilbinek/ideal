@@ -13,7 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useServers } from "@/hooks/useServers";
+import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { useServerLogs } from "@/hooks/useServerLogs";
 import { formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -50,23 +50,51 @@ export function ServerDetail() {
     queryKey: ["servers", serverId],
     queryFn: () => api.getServer(serverId),
     enabled: serverId > 0,
+    refetchInterval: (query) => {
+      const s = query.state.data?.status;
+      return s === "starting" || s === "stopping" ? 2000 : false;
+    },
   });
 
   const live = statusFor(serverId);
-  const status = live?.status ?? server.data?.status ?? "stopped";
+  const status = server.data?.status ?? live?.status ?? "stopped";
   const isRunning = status === "running" || status === "starting";
 
   const start = useMutation({
     mutationFn: () => api.startServer(serverId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+    onMutate: () => patchServerStatus(queryClient, serverId, "starting"),
+    onSuccess: () => {
+      patchServerStatus(queryClient, serverId, "running");
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+    },
   });
   const stop = useMutation({
     mutationFn: () => api.stopServer(serverId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+    onMutate: () => patchServerStatus(queryClient, serverId, "stopping"),
+    onSuccess: () => {
+      patchServerStatus(queryClient, serverId, "stopped");
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+    },
   });
   const restart = useMutation({
     mutationFn: () => api.restartServer(serverId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+    onMutate: () => patchServerStatus(queryClient, serverId, "starting"),
+    onSuccess: () => {
+      patchServerStatus(queryClient, serverId, "running");
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+    },
   });
   const del = useMutation({
     mutationFn: () => api.deleteServer(serverId),

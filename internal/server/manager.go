@@ -235,6 +235,12 @@ func (m *Manager) Stop(serverID int) error {
 	if err := stopProcess(inst.pid); err != nil {
 		return err
 	}
+
+	m.mu.Lock()
+	delete(m.instances, serverID)
+	m.mu.Unlock()
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, inst.rptPath)
+	m.broadcast()
 	return nil
 }
 

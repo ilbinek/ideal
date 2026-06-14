@@ -8,7 +8,7 @@ import {
   Square,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useServers } from "@/hooks/useServers";
+import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -44,11 +44,27 @@ export function Servers() {
 
   const start = useMutation({
     mutationFn: (id: number) => api.startServer(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+    onMutate: (id) => patchServerStatus(queryClient, id, "starting"),
+    onSuccess: (_data, id) => {
+      patchServerStatus(queryClient, id, "running");
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      queryClient.invalidateQueries({ queryKey: ["servers", id] });
+    },
+    onError: (_err, id) => {
+      queryClient.invalidateQueries({ queryKey: ["servers", id] });
+    },
   });
   const stop = useMutation({
     mutationFn: (id: number) => api.stopServer(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["servers"] }),
+    onMutate: (id) => patchServerStatus(queryClient, id, "stopping"),
+    onSuccess: (_data, id) => {
+      patchServerStatus(queryClient, id, "stopped");
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      queryClient.invalidateQueries({ queryKey: ["servers", id] });
+    },
+    onError: (_err, id) => {
+      queryClient.invalidateQueries({ queryKey: ["servers", id] });
+    },
   });
 
   const branchName = (id: number) =>
@@ -102,7 +118,7 @@ export function Servers() {
         <div className="grid gap-4 sm:grid-cols-2">
           {servers.data.map((srv) => {
             const live = statusFor(srv.id);
-            const status = live?.status ?? srv.status;
+            const status = srv.status ?? live?.status ?? "stopped";
             const isRunning = status === "running" || status === "starting";
             return (
               <Card key={srv.id} className="flex flex-col">
