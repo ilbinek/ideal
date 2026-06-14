@@ -53,3 +53,98 @@ export interface StartupCommand {
 }
 
 export type DownloadScope = "all" | "outdated" | "missing";
+
+export interface ArmaBranch {
+  id: number;
+  name: string;
+  steamBranch: string;
+  installPath: string;
+  installed: boolean;
+  lastUpdated: string;
+}
+
+export interface BranchInstallSnapshot {
+  branchId: number;
+  installing: boolean;
+  message: string;
+  percentage: number;
+  error?: string;
+}
+
+export type ServerStatus = "stopped" | "starting" | "running" | "stopping" | "unknown";
+
+export interface GameServer {
+  id: number;
+  name: string;
+  slug: string;
+  branchId: number;
+  modsetId?: number;
+  gamePort: number;
+  steamPort: number;
+  profileName: string;
+  extraLaunchParams: string;
+  status: ServerStatus;
+  pid: number;
+  activeRpt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ServerMod {
+  id?: number;
+  serverId?: number;
+  modId?: number;
+  customPath?: string;
+  label: string;
+  isServerMod: boolean;
+  sortOrder?: number;
+}
+
+export interface ServerKey {
+  id: number;
+  serverId: number;
+  filename: string;
+  sourcePath: string;
+}
+
+export interface ServerKeysResponse {
+  custom: ServerKey[];
+  auto: string[];
+}
+
+export interface ServerStatusSnapshot {
+  id: number;
+  name: string;
+  slug: string;
+  status: ServerStatus;
+  pid: number;
+  activeRpt: string;
+  uptime: number;
+  startedAt?: string;
+}
+
+export interface AllServersSnapshot {
+  servers: ServerStatusSnapshot[];
+}
+
+export interface LaunchArgs {
+  command: string;
+  modParam: string;
+  serverModParam: string;
+  binary: string;
+  args: string[];
+  workingDir: string;
+}
+
+export interface LogEntry {
+  name: string;
+  path: string;
+  size: number;
+  modTime: string;
+}
+
+export interface LogContent {
+  content: string;
+  totalSize: number;
+  offset: number;
+}

@@ -107,7 +107,7 @@ func migrate() error {
 			return err
 		}
 	}
-	return nil
+	return migrateServers()
 }
 
 func Close() error {

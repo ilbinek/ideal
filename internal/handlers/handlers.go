@@ -46,6 +46,49 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("POST /api/a3sync/generate", apiAuth(GenerateA3SyncAPIHandler))
 	mux.HandleFunc("GET /api/startup-command", apiAuth(StartupCommandAPIHandler))
 
+	// Branches
+	mux.HandleFunc("GET /api/branches", apiAuth(GetBranchesHandler))
+	mux.HandleFunc("POST /api/branches", apiAuth(CreateBranchHandler))
+	mux.HandleFunc("POST /api/branches/{id}/install", apiAuth(InstallBranchHandler))
+	mux.HandleFunc("GET /api/branches/install/stream", apiAuth(BranchInstallStreamHandler))
+
+	// Servers
+	mux.HandleFunc("GET /api/servers", apiAuth(GetServersHandler))
+	mux.HandleFunc("POST /api/servers", apiAuth(CreateServerHandler))
+	mux.HandleFunc("GET /api/servers/stream", apiAuth(ServersStreamHandler))
+	mux.HandleFunc("GET /api/servers/{id}", apiAuth(GetServerHandler))
+	mux.HandleFunc("PUT /api/servers/{id}", apiAuth(UpdateServerHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}", apiAuth(DeleteServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/provision", apiAuth(ProvisionServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/start", apiAuth(StartServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/stop", apiAuth(StopServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/restart", apiAuth(RestartServerHandler))
+	mux.HandleFunc("GET /api/servers/{id}/status", apiAuth(ServerStatusHandler))
+	mux.HandleFunc("GET /api/servers/{id}/launch", apiAuth(ServerLaunchPreviewHandler))
+
+	// Server mods
+	mux.HandleFunc("GET /api/servers/{id}/mods", apiAuth(GetServerModsHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/mods", apiAuth(PutServerModsHandler))
+
+	// Server keys
+	mux.HandleFunc("GET /api/servers/{id}/keys", apiAuth(GetServerKeysHandler))
+	mux.HandleFunc("POST /api/servers/{id}/keys", apiAuth(UploadServerKeyHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/keys/{keyId}", apiAuth(DeleteServerKeyHandler))
+
+	// Server config
+	mux.HandleFunc("GET /api/servers/{id}/config/{name}", apiAuth(GetServerConfigHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/config/{name}", apiAuth(PutServerConfigHandler))
+
+	// Server logs
+	mux.HandleFunc("GET /api/servers/{id}/logs", apiAuth(ListServerLogsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/logs/stream", apiAuth(ServerLogStreamHandler))
+	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}", apiAuth(GetServerLogHandler))
+
+	// Missions
+	mux.HandleFunc("GET /api/servers/{id}/missions", apiAuth(ListMissionsHandler))
+	mux.HandleFunc("POST /api/servers/{id}/missions/upload", apiAuth(UploadMissionHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/missions/{name}", apiAuth(DeleteMissionHandler))
+
 	return mux
 }
 

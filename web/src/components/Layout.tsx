@@ -1,13 +1,15 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Boxes, Download, Home, LogOut, Package, Settings } from "lucide-react";
+import { Boxes, Download, Home, LogOut, Package, Server, Settings } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DownloadsProvider, useDownloads } from "@/hooks/useDownloads";
+import { ServersProvider } from "@/hooks/useServers";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: Home, end: true },
+  { to: "/servers", label: "Servers", icon: Server },
   { to: "/modsets", label: "Modsets", icon: Boxes },
   { to: "/mods", label: "Mods", icon: Package },
 ];
@@ -48,7 +50,7 @@ function Shell() {
             <Package className="size-5 text-primary" />
             <span>IDEAL</span>
             <span className="hidden text-xs font-normal text-muted-foreground sm:inline">
-              Arma 3 Mod Manager
+              Arma 3 Server Manager
             </span>
           </div>
           <nav className="flex items-center gap-1">
@@ -106,7 +108,9 @@ function Shell() {
 export function Layout() {
   return (
     <DownloadsProvider>
-      <Shell />
+      <ServersProvider>
+        <Shell />
+      </ServersProvider>
     </DownloadsProvider>
   );
 }

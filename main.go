@@ -8,6 +8,7 @@ import (
 	"arma3modmanager/internal/config"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/handlers"
+	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/utils"
 	"arma3modmanager/web"
 )
@@ -23,6 +24,8 @@ func main() {
 		log.Fatal("Failed to initialize database:", err)
 	}
 	defer database.Close()
+
+	server.Init()
 
 	// Ensure addons directory exists
 	if err := utils.EnsureAddonsDirectory(); err != nil {
