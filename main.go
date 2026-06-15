@@ -9,6 +9,7 @@ import (
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/handlers"
 	"arma3modmanager/internal/server"
+	"arma3modmanager/internal/steam"
 	"arma3modmanager/internal/utils"
 	"arma3modmanager/web"
 )
@@ -28,6 +29,11 @@ func main() {
 	server.Init()
 
 	log.Printf("[IDEAL] data directory: %s", utils.DataRoot())
+
+	// Initialize the built-in Steam (gosteam) token/state store.
+	if err := steam.Default.Init(); err != nil {
+		log.Fatal("Failed to initialize Steam store:", err)
+	}
 
 	// Ensure addons directory exists
 	if err := utils.EnsureAddonsDirectory(); err != nil {

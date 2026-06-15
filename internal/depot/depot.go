@@ -19,6 +19,7 @@ const (
 
 // Downloader identifiers (stored in config.downloader).
 const (
+	DownloaderGoSteam  = "gosteam" // built-in library; the default
 	DownloaderDepot    = "depotdownloader"
 	DownloaderSteamCmd = "steamcmd"
 )

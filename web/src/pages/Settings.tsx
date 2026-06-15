@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { SteamLogin } from "@/components/SteamLogin";
 
 export function SettingsPage() {
   const toast = useToast();
@@ -24,9 +25,10 @@ export function SettingsPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [downloader, setDownloader] = useState<Downloader>("depotdownloader");
+  const [downloader, setDownloader] = useState<Downloader>("gosteam");
   const [steamCmdPath, setSteamCmdPath] = useState("");
   const [depotDownloaderPath, setDepotDownloaderPath] = useState("");
+  const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(4);
 
   useEffect(() => {
     if (data) {
@@ -35,6 +37,7 @@ export function SettingsPage() {
       setDownloader(data.downloader);
       setSteamCmdPath(data.steamCmdPath);
       setDepotDownloaderPath(data.depotDownloaderPath);
+      setMaxConcurrentDownloads(data.maxConcurrentDownloads || 4);
     }
   }, [data]);
 
@@ -47,6 +50,7 @@ export function SettingsPage() {
         downloader,
         steamCmdPath,
         depotDownloaderPath,
+        maxConcurrentDownloads,
       }),
     onSuccess: () => {
       toast.success("Settings saved");
@@ -56,6 +60,8 @@ export function SettingsPage() {
     onError: (e) =>
       toast.error("Failed to save", e instanceof ApiError ? e.message : undefined),
   });
+
+  const isGoSteam = downloader === "gosteam";
 
   return (
     <form
@@ -76,7 +82,7 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Downloader</CardTitle>
           <CardDescription>
-            Choose which tool fetches Workshop mods. Both need a Steam account that
+            Choose which tool fetches Workshop mods. All need a Steam account that
             owns Arma 3.
           </CardDescription>
         </CardHeader>
@@ -88,12 +94,31 @@ export function SettingsPage() {
               value={downloader}
               onChange={(e) => setDownloader(e.target.value as Downloader)}
             >
+              <option value="gosteam">Built-in (gosteam) — recommended</option>
               <option value="depotdownloader">DepotDownloader</option>
               <option value="steamcmd">SteamCMD</option>
             </Select>
           </div>
 
-          {downloader === "steamcmd" ? (
+          {isGoSteam ? (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="maxConcurrent">Concurrent downloads</Label>
+              <Input
+                id="maxConcurrent"
+                type="number"
+                min={1}
+                max={16}
+                value={maxConcurrentDownloads}
+                onChange={(e) =>
+                  setMaxConcurrentDownloads(Math.max(1, Number(e.target.value) || 1))
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                How many mods download at the same time. Built-in downloader logs in
+                once and delta-patches existing mods, so re-downloads are fast.
+              </p>
+            </div>
+          ) : downloader === "steamcmd" ? (
             <div className="flex flex-col gap-2">
               <Label htmlFor="steamCmdPath">SteamCMD path</Label>
               <Input
@@ -126,10 +151,16 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
+      {isGoSteam && <SteamLogin defaultUsername={username} />}
+
       <Card className="max-w-xl">
         <CardHeader>
           <CardTitle className="text-base">Steam configuration</CardTitle>
-          <CardDescription>Stored locally in the app database.</CardDescription>
+          <CardDescription>
+            {isGoSteam
+              ? "The built-in downloader uses the login above; no password is stored. The API key powers update checks."
+              : "Stored locally in the app database."}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
@@ -141,17 +172,19 @@ export function SettingsPage() {
               autoComplete="off"
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="password">Steam password</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={data?.hasPassword ? "•••••••• (leave blank to keep)" : ""}
-              autoComplete="new-password"
-            />
-          </div>
+          {!isGoSteam && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Steam password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={data?.hasPassword ? "•••••••• (leave blank to keep)" : ""}
+                autoComplete="new-password"
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-2">
             <Label htmlFor="apiKey">Steam Web API key</Label>
             <Input

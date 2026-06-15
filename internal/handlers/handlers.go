@@ -25,6 +25,13 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("GET /api/settings", apiAuth(GetSettingsHandler))
 	mux.HandleFunc("POST /api/settings", apiAuth(SaveSettingsAPIHandler))
 
+	// Steam login (built-in gosteam downloader)
+	mux.HandleFunc("GET /api/steam/status", apiAuth(SteamStatusHandler))
+	mux.HandleFunc("GET /api/steam/login/stream", apiAuth(SteamLoginStreamHandler))
+	mux.HandleFunc("POST /api/steam/login", apiAuth(SteamLoginHandler))
+	mux.HandleFunc("POST /api/steam/login/guard", apiAuth(SteamGuardHandler))
+	mux.HandleFunc("POST /api/steam/logout", apiAuth(SteamLogoutHandler))
+
 	// Modsets
 	mux.HandleFunc("GET /api/modsets", apiAuth(GetModsetsHandler))
 	mux.HandleFunc("POST /api/modsets/upload", apiAuth(UploadModsetAPIHandler))

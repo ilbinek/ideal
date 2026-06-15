@@ -15,7 +15,7 @@ export interface Modset {
   createdAt: string;
 }
 
-export type Downloader = "depotdownloader" | "steamcmd";
+export type Downloader = "gosteam" | "depotdownloader" | "steamcmd";
 
 export interface Settings {
   username: string;
@@ -24,6 +24,23 @@ export interface Settings {
   downloader: Downloader;
   steamCmdPath: string;
   depotDownloaderPath: string;
+  maxConcurrentDownloads: number;
+}
+
+export type SteamLoginPhase =
+  | "idle"
+  | "connecting"
+  | "guard_required"
+  | "qr_challenge"
+  | "logged_in"
+  | "error";
+
+export interface SteamLoginState {
+  phase: SteamLoginPhase;
+  username?: string;
+  guardKind?: "email" | "device" | "unknown";
+  challengeUrl?: string;
+  error?: string;
 }
 
 export type DownloadStatus = "queued" | "downloading" | "done" | "error";

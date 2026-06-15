@@ -55,12 +55,13 @@ func SessionHandler(w http.ResponseWriter, r *http.Request) {
 func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	config, _ := database.GetConfig()
 	resp := map[string]interface{}{
-		"username":            "",
-		"apiKey":              "",
-		"hasPassword":         false,
-		"downloader":          depot.DownloaderDepot,
-		"steamCmdPath":        "",
-		"depotDownloaderPath": "",
+		"username":               "",
+		"apiKey":                 "",
+		"hasPassword":            false,
+		"downloader":             depot.DownloaderGoSteam,
+		"steamCmdPath":           "",
+		"depotDownloaderPath":    "",
+		"maxConcurrentDownloads": 4,
 	}
 	if config != nil {
 		resp["username"] = config.Username
@@ -71,18 +72,22 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["steamCmdPath"] = config.SteamCmdPath
 		resp["depotDownloaderPath"] = config.DepotDownloaderPath
+		if config.MaxConcurrentDownloads > 0 {
+			resp["maxConcurrentDownloads"] = config.MaxConcurrentDownloads
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Username            string `json:"username"`
-		Password            string `json:"password"`
-		ApiKey              string `json:"apiKey"`
-		Downloader          string `json:"downloader"`
-		SteamCmdPath        string `json:"steamCmdPath"`
-		DepotDownloaderPath string `json:"depotDownloaderPath"`
+		Username               string `json:"username"`
+		Password               string `json:"password"`
+		ApiKey                 string `json:"apiKey"`
+		Downloader             string `json:"downloader"`
+		SteamCmdPath           string `json:"steamCmdPath"`
+		DepotDownloaderPath    string `json:"depotDownloaderPath"`
+		MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -97,13 +102,15 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Coerce the downloader to a known value (default to DepotDownloader).
+	// Coerce the downloader to a known value (default to the built-in gosteam).
 	downloader := body.Downloader
-	if downloader != depot.DownloaderSteamCmd {
-		downloader = depot.DownloaderDepot
+	switch downloader {
+	case depot.DownloaderSteamCmd, depot.DownloaderDepot, depot.DownloaderGoSteam:
+	default:
+		downloader = depot.DownloaderGoSteam
 	}
 
-	if err := database.SaveConfig(body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath); err != nil {
+	if err := database.SaveConfig(body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath, body.MaxConcurrentDownloads); err != nil {
 		log.Printf("Error saving config: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to save settings")
 		return

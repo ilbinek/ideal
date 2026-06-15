@@ -15,6 +15,7 @@ import type {
   ServerStatusSnapshot,
   Settings,
   StartupCommand,
+  SteamLoginState,
 } from "./types";
 
 export class ApiError extends Error {
@@ -77,11 +78,26 @@ export const api = {
     downloader: Downloader;
     steamCmdPath: string;
     depotDownloaderPath: string;
+    maxConcurrentDownloads: number;
   }) =>
     request<{ ok: boolean }>("/api/settings", {
       method: "POST",
       body: JSON.stringify(s),
     }),
+
+  // Steam login (built-in gosteam downloader)
+  steamStatus: () => request<SteamLoginState>("/api/steam/status"),
+  steamLogin: (body: { method: "credentials" | "qr"; username?: string; password?: string }) =>
+    request<{ started: boolean }>("/api/steam/login", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  steamGuard: (code: string) =>
+    request<{ ok: boolean }>("/api/steam/login/guard", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  steamLogout: () => request<{ ok: boolean }>("/api/steam/logout", { method: "POST" }),
 
   // Modsets
   getModsets: () => request<Modset[]>("/api/modsets"),

@@ -5,11 +5,14 @@
 package queue
 
 import (
+	"context"
 	"log"
+	"path/filepath"
 	"sync"
 
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
+	"arma3modmanager/internal/steam"
 	"arma3modmanager/internal/utils"
 )
 
@@ -112,20 +115,51 @@ func (m *Manager) hasPendingLocked(id int) bool {
 
 func (m *Manager) worker() {
 	for {
+		config, cfgErr := database.GetConfig()
+
+		// Collect every currently-queued item. The gosteam path downloads the
+		// whole batch concurrently; the legacy executables download one at a time.
 		m.mu.Lock()
-		var current *Item
+		var batch []*Item
 		for _, it := range m.items {
 			if it.Status == StatusQueued {
-				current = it
-				break
+				batch = append(batch, it)
 			}
 		}
-		if current == nil {
+		if len(batch) == 0 {
 			m.processing = false
 			m.mu.Unlock()
 			m.broadcast()
 			return
 		}
+		m.mu.Unlock()
+
+		if cfgErr != nil || config == nil {
+			for _, it := range batch {
+				m.setError(it, "Steam credentials not configured")
+			}
+			m.broadcast()
+			continue
+		}
+
+		if config.Downloader == depot.DownloaderGoSteam {
+			m.mu.Lock()
+			for _, it := range batch {
+				it.Status = StatusDownloading
+				it.Message = "Starting..."
+				it.Percentage = 0
+			}
+			m.mu.Unlock()
+			m.broadcast()
+
+			m.downloadGoSteamBatch(config, batch)
+			m.broadcast()
+			continue
+		}
+
+		// Legacy sequential path: one external-process download at a time.
+		current := batch[0]
+		m.mu.Lock()
 		current.Status = StatusDownloading
 		current.Message = "Starting..."
 		current.Percentage = 0
@@ -135,6 +169,96 @@ func (m *Manager) worker() {
 		m.download(current)
 		m.broadcast()
 	}
+}
+
+// downloadGoSteamBatch downloads every item in batch concurrently over a single
+// built-in Steam session, mapping per-mod progress back onto the queue items.
+func (m *Manager) downloadGoSteamBatch(config *database.Config, batch []*Item) {
+	ctx := context.Background()
+
+	sess, err := steam.Default.EnsureSession(ctx, config.Username)
+	if err != nil {
+		for _, it := range batch {
+			m.setError(it, err.Error())
+		}
+		return
+	}
+	store := steam.Default.Store()
+
+	byID := make(map[string]*Item, len(batch))
+	ids := make([]string, 0, len(batch))
+	for _, it := range batch {
+		byID[it.WorkshopID] = it
+		ids = append(ids, it.WorkshopID)
+	}
+
+	// gosteam calls OnProgress concurrently (one goroutine per in-flight mod).
+	onProgress := func(workshopID string, u depot.ProgressUpdate) {
+		it, ok := byID[workshopID]
+		if !ok {
+			return
+		}
+		switch u.Stage {
+		case "complete":
+			m.finishGoSteamItem(it)
+		case "error":
+			m.setError(it, u.Message)
+			m.broadcast()
+		default:
+			m.mu.Lock()
+			if u.Message != "" {
+				it.Message = u.Message
+			}
+			if u.Percentage > 0 {
+				it.Percentage = u.Percentage
+			}
+			if u.FileName != "" {
+				it.FileName = u.FileName
+			}
+			m.mu.Unlock()
+			m.broadcast()
+		}
+	}
+
+	cfg := depot.GoSteamConfig{
+		OutputDir:         modsDirectory,
+		MaxConcurrentMods: config.MaxConcurrentDownloads,
+	}
+	if err := depot.DownloadBatchGoSteam(ctx, sess, store, ids, cfg, onProgress); err != nil {
+		log.Printf("[QUEUE] gosteam batch failed: %v", err)
+		// Mark anything still in flight (never reported complete/error) as failed.
+		for _, it := range batch {
+			m.mu.Lock()
+			pending := it.Status == StatusDownloading
+			m.mu.Unlock()
+			if pending {
+				m.setError(it, "Download failed: "+err.Error())
+			}
+		}
+		m.broadcast()
+	}
+}
+
+// finishGoSteamItem records a completed gosteam download in the DB and refreshes
+// its addons mirror (rebuilt so symlinks for pruned files don't linger).
+func (m *Manager) finishGoSteamItem(it *Item) {
+	modPath := filepath.Join(modsDirectory, it.WorkshopID)
+	if err := database.UpdateModDownloaded(it.ID, true, modPath); err != nil {
+		log.Printf("[QUEUE] failed to update mod status: %v", err)
+	}
+	if err := utils.RemoveModFromAddons(modPath); err != nil {
+		log.Printf("[QUEUE] failed to clear addons mirror: %v", err)
+	}
+	if err := utils.SyncModToAddons(modPath); err != nil {
+		log.Printf("[QUEUE] failed to sync mod to addons: %v", err)
+	}
+
+	m.mu.Lock()
+	it.Status = StatusDone
+	it.Percentage = 100
+	it.Message = "Download complete"
+	m.mu.Unlock()
+	m.broadcast()
 }
 
 func (m *Manager) download(item *Item) {

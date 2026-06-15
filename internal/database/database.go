@@ -14,13 +14,14 @@ import (
 var db *sql.DB
 
 type Config struct {
-	ID                  int    `json:"id"`
-	Username            string `json:"username"`
-	Password            string `json:"-"`
-	ApiKey              string `json:"apiKey"`
-	Downloader          string `json:"downloader"`          // "depotdownloader" | "steamcmd"
-	SteamCmdPath        string `json:"steamCmdPath"`        // optional; blank = use PATH
-	DepotDownloaderPath string `json:"depotDownloaderPath"` // optional; blank = use PATH
+	ID                     int    `json:"id"`
+	Username               string `json:"username"`
+	Password               string `json:"-"`
+	ApiKey                 string `json:"apiKey"`
+	Downloader             string `json:"downloader"`             // "gosteam" | "depotdownloader" | "steamcmd"
+	SteamCmdPath           string `json:"steamCmdPath"`           // optional; blank = use PATH
+	DepotDownloaderPath    string `json:"depotDownloaderPath"`    // optional; blank = use PATH
+	MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"` // gosteam: mods downloaded at once
 }
 
 type Modset struct {
@@ -57,9 +58,10 @@ func Init() error {
 		username TEXT NOT NULL,
 		password TEXT NOT NULL,
 		api_key TEXT,
-		downloader TEXT DEFAULT 'depotdownloader',
+		downloader TEXT DEFAULT 'gosteam',
 		steam_cmd_path TEXT DEFAULT '',
-		depot_downloader_path TEXT DEFAULT ''
+		depot_downloader_path TEXT DEFAULT '',
+		max_concurrent_downloads INTEGER DEFAULT 4
 	);
 
 	CREATE TABLE IF NOT EXISTS modsets (
@@ -107,6 +109,7 @@ func migrate() error {
 		"ALTER TABLE config ADD COLUMN downloader TEXT DEFAULT 'depotdownloader'",
 		"ALTER TABLE config ADD COLUMN steam_cmd_path TEXT DEFAULT ''",
 		"ALTER TABLE config ADD COLUMN depot_downloader_path TEXT DEFAULT ''",
+		"ALTER TABLE config ADD COLUMN max_concurrent_downloads INTEGER DEFAULT 4",
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -127,33 +130,39 @@ func GetConfig() (*Config, error) {
 	config := &Config{}
 	err := db.QueryRow(`
 		SELECT id, username, password, COALESCE(api_key, ''),
-		       COALESCE(downloader, 'depotdownloader'),
+		       COALESCE(downloader, 'gosteam'),
 		       COALESCE(steam_cmd_path, ''),
-		       COALESCE(depot_downloader_path, '')
+		       COALESCE(depot_downloader_path, ''),
+		       COALESCE(max_concurrent_downloads, 4)
 		FROM config LIMIT 1`).
 		Scan(&config.ID, &config.Username, &config.Password, &config.ApiKey,
-			&config.Downloader, &config.SteamCmdPath, &config.DepotDownloaderPath)
+			&config.Downloader, &config.SteamCmdPath, &config.DepotDownloaderPath,
+			&config.MaxConcurrentDownloads)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return config, err
 }
 
-func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string) error {
+func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string, maxConcurrentDownloads int) error {
 	config, err := GetConfig()
 	if err != nil {
 		return err
 	}
 
+	if maxConcurrentDownloads <= 0 {
+		maxConcurrentDownloads = 4
+	}
+
 	if config == nil {
 		_, err = db.Exec(
-			"INSERT INTO config (username, password, api_key, downloader, steam_cmd_path, depot_downloader_path) VALUES (?, ?, ?, ?, ?, ?)",
-			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
+			"INSERT INTO config (username, password, api_key, downloader, steam_cmd_path, depot_downloader_path, max_concurrent_downloads) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath, maxConcurrentDownloads,
 		)
 	} else {
 		_, err = db.Exec(
-			"UPDATE config SET username = ?, password = ?, api_key = ?, downloader = ?, steam_cmd_path = ?, depot_downloader_path = ? WHERE id = ?",
-			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath, config.ID,
+			"UPDATE config SET username = ?, password = ?, api_key = ?, downloader = ?, steam_cmd_path = ?, depot_downloader_path = ?, max_concurrent_downloads = ? WHERE id = ?",
+			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath, maxConcurrentDownloads, config.ID,
 		)
 	}
 	return err
