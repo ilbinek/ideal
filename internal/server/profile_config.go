@@ -15,12 +15,52 @@ type ProfileFileEntry struct {
 	ModTime string `json:"modTime"`
 }
 
-func profileDir(slug, profileName string) string {
+func normalizeProfileName(profileName string) string {
 	name := strings.TrimSpace(profileName)
 	if name == "" {
-		name = "Server"
+		return "Server"
 	}
-	return filepath.Join(InstanceDir(slug), "profiles", name)
+	return name
+}
+
+func canonicalProfileDir(slug, profileName string) string {
+	name := normalizeProfileName(profileName)
+	return filepath.Join(InstanceDir(slug), "profiles", "Users", name)
+}
+
+func profileDirCandidates(slug, profileName string) []string {
+	name := normalizeProfileName(profileName)
+	instanceDir := InstanceDir(slug)
+	return []string{
+		filepath.Join(instanceDir, "profiles", "Users", name),
+		filepath.Join(instanceDir, "profiles", name, "Users", name),
+		filepath.Join(instanceDir, "profiles", name),
+	}
+}
+
+func dirHasProfileFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if validateProfileFilename(e.Name()) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveProfileDir(slug, profileName string) string {
+	for _, dir := range profileDirCandidates(slug, profileName) {
+		if dirHasProfileFiles(dir) {
+			return dir
+		}
+	}
+	return canonicalProfileDir(slug, profileName)
 }
 
 func validateProfileFilename(filename string) error {
@@ -39,7 +79,7 @@ func validateProfileFilename(filename string) error {
 
 // ListProfileFiles returns editable files in the server's profile directory.
 func ListProfileFiles(slug, profileName string) ([]ProfileFileEntry, error) {
-	dir := profileDir(slug, profileName)
+	dir := resolveProfileDir(slug, profileName)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -77,7 +117,7 @@ func ReadProfileFile(slug, profileName, filename string) (string, error) {
 	if err := validateProfileFilename(filename); err != nil {
 		return "", err
 	}
-	path := filepath.Join(profileDir(slug, profileName), filename)
+	path := filepath.Join(resolveProfileDir(slug, profileName), filename)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -93,7 +133,7 @@ func WriteProfileFile(slug, profileName, filename, content string) error {
 	if err := validateProfileFilename(filename); err != nil {
 		return err
 	}
-	dir := profileDir(slug, profileName)
+	dir := canonicalProfileDir(slug, profileName)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}

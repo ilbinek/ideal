@@ -191,7 +191,7 @@ export function ServerDetail() {
       {tab === "overview" && <OverviewTab serverId={serverId} srv={srv} />}
       {tab === "mods" && <ModsTab serverId={serverId} />}
       {tab === "keys" && <KeysTab serverId={serverId} />}
-      {tab === "config" && <ConfigTab serverId={serverId} />}
+      {tab === "config" && <ConfigTab serverId={serverId} serverStatus={status} />}
       {tab === "logs" && <LogsTab serverId={serverId} isRunning={isRunning} />}
       {tab === "missions" && <MissionsTab serverId={serverId} />}
     </div>
@@ -605,7 +605,7 @@ function KeysTab({ serverId }: { serverId: number }) {
   );
 }
 
-function ConfigTab({ serverId }: { serverId: number }) {
+function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus: string }) {
   type ConfigKind = "server.cfg" | "basic.cfg" | "profile";
 
   const server = useQuery({
@@ -618,7 +618,7 @@ function ConfigTab({ serverId }: { serverId: number }) {
   const [dirty, setDirty] = useState(false);
 
   const profileFiles = useQuery({
-    queryKey: ["profileFiles", serverId],
+    queryKey: ["profileFiles", serverId, serverStatus],
     queryFn: () => api.listProfileFiles(serverId),
     enabled: kind === "profile",
   });
@@ -659,6 +659,7 @@ function ConfigTab({ serverId }: { serverId: number }) {
   });
 
   const profileLabel = server.data?.profileName ?? "Server";
+  const profileFolder = `profiles/Users/${profileLabel}/`;
 
   return (
     <Card>
@@ -686,7 +687,7 @@ function ConfigTab({ serverId }: { serverId: number }) {
         {kind === "profile" && (
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-xs text-muted-foreground">
-              Profile folder: <code>profiles/{profileLabel}/</code>
+              Profile folder: <code>{profileFolder}</code>
             </p>
             {profileFiles.data && profileFiles.data.length > 0 ? (
               <select
@@ -717,7 +718,7 @@ function ConfigTab({ serverId }: { serverId: number }) {
         ) : kind === "profile" && !profileFile ? (
           <p className="text-sm text-muted-foreground">
             No profile file selected. Run the server to create profile files in{" "}
-            <code>profiles/{profileLabel}/</code>.
+            <code>{profileFolder}</code>.
           </p>
         ) : (
           <textarea

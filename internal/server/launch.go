@@ -38,14 +38,14 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 	binaryName := filepath.Base(filepath.FromSlash(binaryRel))
 	binaryPath := filepath.Join(instanceDir, binaryName)
 
-	profileDir := filepath.ToSlash(filepath.Join("profiles", srv.ProfileName))
+	profileProfilesArg, profileNameArg := serverProfileLaunchArgs(srv.ProfileName)
 	args := []string{
 		"-port=" + fmt.Sprint(srv.GamePort),
 		"-steamPort=" + fmt.Sprint(srv.SteamPort),
 		"-cfg=basic.cfg",
 		"-config=server.cfg",
-		"-profiles=" + profileDir,
-		"-name=" + srv.ProfileName,
+		"-profiles=" + profileProfilesArg,
+		"-name=" + profileNameArg,
 	}
 
 	modParam, serverModParam := buildModParams(instanceDir, serverID)
@@ -111,4 +111,12 @@ func formatCommandArgs(args []string) []string {
 		out[i] = arg
 	}
 	return out
+}
+
+func serverProfileLaunchArgs(profileName string) (profilesArg, nameArg string) {
+	name := strings.TrimSpace(profileName)
+	if name == "" {
+		name = "Server"
+	}
+	return "profiles", name
 }
