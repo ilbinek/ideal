@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,16 +26,18 @@ func normalizeProfileName(profileName string) string {
 
 func canonicalProfileDir(slug, profileName string) string {
 	name := normalizeProfileName(profileName)
-	return filepath.Join(InstanceDir(slug), "profiles", "Users", name)
+	return filepath.Join(InstanceDir(slug), "profiles", "home", name)
 }
 
 func profileDirCandidates(slug, profileName string) []string {
 	name := normalizeProfileName(profileName)
-	instanceDir := InstanceDir(slug)
+	profiles := filepath.Join(InstanceDir(slug), "profiles")
 	return []string{
-		filepath.Join(instanceDir, "profiles", "Users", name),
-		filepath.Join(instanceDir, "profiles", name, "Users", name),
-		filepath.Join(instanceDir, "profiles", name),
+		filepath.Join(profiles, "home", name),
+		filepath.Join(profiles, "Users", name),
+		filepath.Join(profiles, name, "home", name),
+		filepath.Join(profiles, name, "Users", name),
+		filepath.Join(profiles, name),
 	}
 }
 
@@ -54,11 +57,33 @@ func dirHasProfileFiles(dir string) bool {
 	return false
 }
 
+func discoverProfileDirByWalk(slug, profileName string) string {
+	name := normalizeProfileName(profileName)
+	profilesRoot := filepath.Join(InstanceDir(slug), "profiles")
+	target := strings.ToLower(name + ".arma3profile")
+
+	var found string
+	_ = filepath.WalkDir(profilesRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.ToLower(d.Name()) == target {
+			found = filepath.Dir(path)
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
 func resolveProfileDir(slug, profileName string) string {
 	for _, dir := range profileDirCandidates(slug, profileName) {
 		if dirHasProfileFiles(dir) {
 			return dir
 		}
+	}
+	if dir := discoverProfileDirByWalk(slug, profileName); dir != "" {
+		return dir
 	}
 	return canonicalProfileDir(slug, profileName)
 }
@@ -133,7 +158,7 @@ func WriteProfileFile(slug, profileName, filename, content string) error {
 	if err := validateProfileFilename(filename); err != nil {
 		return err
 	}
-	dir := canonicalProfileDir(slug, profileName)
+	dir := resolveProfileDir(slug, profileName)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}

@@ -8,9 +8,9 @@ import (
 
 func TestServerProfileLaunchArgs(t *testing.T) {
 	tests := []struct {
-		input       string
+		input        string
 		wantProfiles string
-		wantName    string
+		wantName     string
 	}{
 		{"tbd_public", "profiles", "tbd_public"},
 		{"Server", "profiles", "Server"},
@@ -34,13 +34,13 @@ func TestCanonicalProfileDir(t *testing.T) {
 	t.Setenv("IDEAL_DATA_DIR", dir)
 
 	got := canonicalProfileDir("my-server", "tbd_public")
-	want := filepath.Join(dir, "servers", "my-server", "profiles", "Users", "tbd_public")
+	want := filepath.Join(dir, "servers", "my-server", "profiles", "home", "tbd_public")
 	if got != want {
 		t.Fatalf("canonicalProfileDir() = %q, want %q", got, want)
 	}
 
 	gotDefault := canonicalProfileDir("my-server", "")
-	wantDefault := filepath.Join(dir, "servers", "my-server", "profiles", "Users", "Server")
+	wantDefault := filepath.Join(dir, "servers", "my-server", "profiles", "home", "Server")
 	if gotDefault != wantDefault {
 		t.Fatalf("canonicalProfileDir() with empty name = %q, want %q", gotDefault, wantDefault)
 	}
@@ -66,7 +66,27 @@ func TestResolveProfileDirPrefersCanonical(t *testing.T) {
 	}
 }
 
-func TestResolveProfileDirLegacyNestedPath(t *testing.T) {
+func TestResolveProfileDirLegacyHomeNestedPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("IDEAL_DATA_DIR", dir)
+	slug := "tbd"
+	name := "tbd_public"
+
+	legacy := filepath.Join(InstanceDir(slug), "profiles", name, "home", name)
+	if err := os.MkdirAll(legacy, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "tbd_public.Arma3Profile"), []byte("class"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveProfileDir(slug, name)
+	if got != legacy {
+		t.Fatalf("resolveProfileDir() = %q, want legacy %q", got, legacy)
+	}
+}
+
+func TestResolveProfileDirLegacyUsersNestedPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("IDEAL_DATA_DIR", dir)
 	slug := "test-server"
@@ -103,6 +123,26 @@ func TestResolveProfileDirLegacyFlatPath(t *testing.T) {
 	got := resolveProfileDir(slug, name)
 	if got != legacy {
 		t.Fatalf("resolveProfileDir() = %q, want legacy %q", got, legacy)
+	}
+}
+
+func TestDiscoverProfileDirByWalk(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("IDEAL_DATA_DIR", dir)
+	slug := "tbd"
+	name := "tbd_public"
+
+	deep := filepath.Join(InstanceDir(slug), "profiles", name, "home", name)
+	if err := os.MkdirAll(deep, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, "tbd_public.Arma3Profile"), []byte("class"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := discoverProfileDirByWalk(slug, name)
+	if got != deep {
+		t.Fatalf("discoverProfileDirByWalk() = %q, want %q", got, deep)
 	}
 }
 

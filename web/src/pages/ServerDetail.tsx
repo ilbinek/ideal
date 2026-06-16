@@ -659,7 +659,7 @@ function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus:
   });
 
   const profileLabel = server.data?.profileName ?? "Server";
-  const profileFolder = `profiles/Users/${profileLabel}/`;
+  const profileFolder = `profiles/home/${profileLabel}/`;
 
   return (
     <Card>

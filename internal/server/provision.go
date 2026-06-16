@@ -41,7 +41,7 @@ func ProvisionServer(serverID int) error {
 	if profileName == "" {
 		profileName = "Server"
 	}
-	if err := os.MkdirAll(filepath.Join(instanceDir, "profiles", "Users", profileName), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(instanceDir, "profiles", "home", profileName), 0755); err != nil {
 		return err
 	}
 
