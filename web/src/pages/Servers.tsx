@@ -143,7 +143,7 @@ export function Servers() {
                   <Button
                     size="sm"
                     variant={isRunning ? "outline" : "default"}
-                    disabled={start.isPending || stop.isPending || status === "stopping"}
+                    disabled={start.isPending || stop.isPending}
                     onClick={() =>
                       isRunning ? stop.mutate(srv.id) : start.mutate(srv.id)
                     }

@@ -509,21 +509,6 @@ func GetServersUsingPort(gamePort, steamPort int, excludeID int) ([]Server, erro
 	return scanServers(rows)
 }
 
-func ReconcileServerStatuses() error {
-	servers, err := GetServers()
-	if err != nil {
-		return err
-	}
-	for _, s := range servers {
-		if s.Status == ServerStatusRunning || s.Status == ServerStatusStarting {
-			if s.PID <= 0 || !processExists(s.PID) {
-				_ = UpdateServerStatus(s.ID, ServerStatusUnknown, 0, s.ActiveRPT)
-			}
-		}
-	}
-	return nil
-}
-
 func nullIfEmpty(s string) interface{} {
 	if strings.TrimSpace(s) == "" {
 		return nil

@@ -144,7 +144,7 @@ export function ServerDetail() {
         <div className="flex gap-2">
           <Button
             size="sm"
-            disabled={start.isPending || stop.isPending || status === "stopping"}
+            disabled={start.isPending || stop.isPending}
             onClick={() => (isRunning ? stop.mutate() : start.mutate())}
           >
             {isRunning ? <Square className="size-3.5" /> : <Play className="size-3.5" />}

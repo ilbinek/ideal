@@ -38,11 +38,11 @@ type Manager struct {
 }
 
 type runningInstance struct {
-	serverID      int
-	pid           int
-	startedAt     time.Time
-	rptPath       string
-	sessionLog    *sessionLogWriter
+	serverID       int
+	pid            int
+	startedAt      time.Time
+	rptPath        string
+	sessionLog     *sessionLogWriter
 	sessionLogPath string
 }
 
@@ -57,8 +57,10 @@ func Init() {
 	ReconcileStatuses()
 }
 
-// ReconcileStatuses marks orphaned running states; servers still bound to their
-// game port are left alone (Arma often outlives the launcher PID we captured).
+// ReconcileStatuses settles orphaned DB statuses on startup. Servers still bound
+// to their game port are left alone when marked running/starting (Arma often
+// outlives the launcher PID we captured). Transitional "stopping" is always
+// recovered so a mid-stop reboot cannot trap the UI.
 func ReconcileStatuses() {
 	servers, err := database.GetServers()
 	if err != nil {
@@ -66,13 +68,30 @@ func ReconcileStatuses() {
 		return
 	}
 	for _, s := range servers {
-		if s.Status != database.ServerStatusRunning && s.Status != database.ServerStatusStarting {
-			continue
+		alive := ServerAlive(s.PID, s.GamePort)
+		switch s.Status {
+		case database.ServerStatusRunning, database.ServerStatusStarting:
+			if !alive {
+				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, 0, s.ActiveRPT)
+			}
+		case database.ServerStatusStopping:
+			if alive && s.PID > 0 && processRunning(s.PID) {
+				if err := stopProcess(s.PID); err != nil && ServerAlive(s.PID, s.GamePort) {
+					// Kill failed and process still up — unknown so Start/Stop stay usable.
+					_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
+					continue
+				}
+			}
+			if ServerAlive(s.PID, s.GamePort) {
+				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
+				continue
+			}
+			_ = database.UpdateServerStatus(s.ID, database.ServerStatusStopped, 0, s.ActiveRPT)
+		case database.ServerStatusUnknown:
+			if !alive {
+				_ = database.UpdateServerStatus(s.ID, database.ServerStatusStopped, 0, s.ActiveRPT)
+			}
 		}
-		if ServerAlive(s.PID, s.GamePort) {
-			continue
-		}
-		_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, 0, s.ActiveRPT)
 	}
 }
 
@@ -247,25 +266,26 @@ func (m *Manager) Stop(serverID int) error {
 	m.mu.Unlock()
 
 	if !ok {
-		srv, err := database.GetServer(serverID)
-		if err != nil {
-			return err
-		}
-		if srv.PID > 0 && processRunning(srv.PID) {
-			if err := stopProcess(srv.PID); err != nil {
-				return err
-			}
-		}
-		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, srv.ActiveRPT)
-		m.broadcast()
-		return nil
+		return m.stopOrphan(serverID)
 	}
 
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopping, inst.pid, inst.rptPath)
 	m.broadcast()
 
+	srv, _ := database.GetServer(serverID)
+	gamePort := 0
+	if srv != nil {
+		gamePort = srv.GamePort
+	}
+
 	if err := stopProcess(inst.pid); err != nil {
-		return err
+		if ServerAlive(inst.pid, gamePort) {
+			// Still running — revert so status cannot stay stuck on "stopping".
+			_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, inst.pid, inst.rptPath)
+			m.broadcast()
+			return err
+		}
+		// Process already gone; treat as a successful stop.
 	}
 
 	m.mu.Lock()
@@ -273,6 +293,22 @@ func (m *Manager) Stop(serverID int) error {
 	delete(m.instances, serverID)
 	m.mu.Unlock()
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, inst.rptPath)
+	m.broadcast()
+	return nil
+}
+
+// stopOrphan clears status for a server not tracked in-memory (e.g. after restart).
+func (m *Manager) stopOrphan(serverID int) error {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return err
+	}
+	if srv.PID > 0 && processRunning(srv.PID) {
+		if err := stopProcess(srv.PID); err != nil && ServerAlive(srv.PID, srv.GamePort) {
+			return err
+		}
+	}
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, srv.ActiveRPT)
 	m.broadcast()
 	return nil
 }
