@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -144,6 +145,9 @@ func findLogPath(slug, filename string) (string, error) {
 }
 
 // ReadLog reads a log file with optional offset and limit.
+// When offset is 0 and the file is larger than the read window, the tail of the
+// file is returned (server logs are most useful from the end) and the read is
+// aligned to the next newline so content does not start mid-line.
 func ReadLog(slug, filename string, offset, limit int64) (content string, totalSize int64, err error) {
 	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
 		return "", 0, fmt.Errorf("invalid filename")
@@ -166,23 +170,43 @@ func ReadLog(slug, filename string, offset, limit int64) (content string, totalS
 	}
 	totalSize = info.Size()
 
+	readSize := limit
+	if readSize <= 0 {
+		readSize = 1024 * 1024 // 1 MiB default window
+	}
+
+	if offset < 0 {
+		offset = 0
+	}
 	if offset > totalSize {
 		offset = totalSize
 	}
+
+	// Default open (offset 0): show the end of large logs, not only the first chunk.
+	if offset == 0 && totalSize > readSize {
+		offset = totalSize - readSize
+	}
+
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return "", 0, err
 	}
 
-	readSize := limit
-	if readSize <= 0 {
-		readSize = 256 * 1024
-	}
 	buf := make([]byte, readSize)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
 		return "", totalSize, err
 	}
-	return string(buf[:n]), totalSize, nil
+	buf = buf[:n]
+
+	// If we started mid-file, drop a partial first line.
+	if offset > 0 {
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 && i+1 < len(buf) {
+			buf = buf[i+1:]
+			offset += int64(i + 1)
+		}
+	}
+
+	return string(buf), totalSize, nil
 }
 
 // ResolveRPTPath returns the best RPT file path for tailing.

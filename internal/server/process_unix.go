@@ -17,7 +17,9 @@ func startProcess(binary string, args []string, workDir string, capture io.Write
 	cmd.Dir = workDir
 	out := io.Writer(os.Stdout)
 	if capture != nil {
-		out = io.MultiWriter(os.Stdout, capture)
+		// Capture first so a slow/blocked Ideal stdout cannot delay or drop
+		// bytes destined for the session log file.
+		out = io.MultiWriter(capture, os.Stdout)
 	}
 	cmd.Stdout = out
 	cmd.Stderr = cmd.Stdout

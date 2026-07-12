@@ -290,8 +290,8 @@ func (m *Manager) Stop(serverID int) error {
 		// Process already gone; treat as a successful stop.
 	}
 
-	// Ensure the child is Wait()'d so it cannot remain a zombie.
-	_ = inst.proc.wait(5 * time.Second)
+	// Wait until stdout/stderr pipes are fully drained before closing the log.
+	_ = inst.proc.wait(30 * time.Second)
 
 	m.mu.Lock()
 	m.closeInstanceLog(inst)
@@ -410,7 +410,7 @@ func (m *Manager) watchServer(serverID int) {
 	m.mu.Lock()
 	if inst, ok := m.instances[serverID]; ok {
 		if inst.proc != nil {
-			_ = inst.proc.wait(2 * time.Second)
+			_ = inst.proc.wait(30 * time.Second)
 		}
 		m.closeInstanceLog(inst)
 	}

@@ -6,8 +6,9 @@ import (
 	"sync"
 )
 
-// sessionLogWriter mirrors process output to a session file (flushed immediately)
-// and keeps a small in-memory tail for quick reads.
+// sessionLogWriter mirrors process output to a session file and keeps a small
+// in-memory tail for quick reads. Data is written to the file immediately and
+// fsync'd on Close so stop/exit does not leave a truncated file.
 type sessionLogWriter struct {
 	mu   sync.Mutex
 	file *os.File
@@ -27,9 +28,8 @@ func (w *sessionLogWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// os/exec copies stdout and stderr on separate goroutines into the same
-	// writer. Arma often emits the same line on both fds; drop exact consecutive
-	// duplicates so session logs are not doubled.
+	// os/exec may copy stdout/stderr into the same writer. Arma often emits the
+	// same line on both fds; drop exact consecutive duplicates.
 	if len(p) > 0 && bytes.Equal(p, w.last) {
 		return len(p), nil
 	}
@@ -39,7 +39,9 @@ func (w *sessionLogWriter) Write(p []byte) (int, error) {
 		if _, err := w.file.Write(p); err != nil {
 			return 0, err
 		}
-		_ = w.file.Sync()
+		// Flush to the kernel so live file tails see output promptly.
+		// Full fsync is deferred to Close — Sync on every Write stalls the
+		// stdout copy goroutine and can truncate capture on kill/stop.
 	}
 
 	w.buf = append(w.buf, p...)
@@ -64,6 +66,7 @@ func (w *sessionLogWriter) Close() error {
 	if w.file == nil {
 		return nil
 	}
+	_ = w.file.Sync()
 	err := w.file.Close()
 	w.file = nil
 	return err
