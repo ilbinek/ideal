@@ -20,7 +20,7 @@ func startProcess(binary string, args []string, workDir string, capture io.Write
 		out = io.MultiWriter(os.Stdout, capture)
 	}
 	cmd.Stdout = out
-	cmd.Stderr = out
+	cmd.Stderr = cmd.Stdout
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {

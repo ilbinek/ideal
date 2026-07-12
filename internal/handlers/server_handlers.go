@@ -782,9 +782,9 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var bufOffset int64
 	var rptOffset int64
 	var sessionOffset int64
+	rptLocked := false
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -803,11 +803,26 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 			rptPath := server.ResolveRPTPath(srv.Slug, server.Default.ActiveRPTPath(id))
 			if rptPath != "" {
-				c, newOffset, err := server.TailLog(rptPath, rptOffset)
-				if err == nil && c != "" {
-					chunk = c
-					rptOffset = newOffset
-					source = rptPath
+				if !rptLocked {
+					// Switch to RPT exclusively. Start at EOF so we do not replay
+					// lines already shown from the session/console capture.
+					if info, err := os.Stat(rptPath); err == nil {
+						rptOffset = info.Size()
+						rptLocked = true
+					}
+				}
+				if rptLocked {
+					c, newOffset, err := server.TailLog(rptPath, rptOffset)
+					if err == nil && c != "" {
+						chunk = c
+						rptOffset = newOffset
+						source = rptPath
+					}
+					// Never fall back to session after locking — same lines often
+					// appear in both and would show up as duplicates.
+					if chunk == "" {
+						continue
+					}
 				}
 			}
 
@@ -820,14 +835,6 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 						sessionOffset = newOffset
 						source = sessionPath
 					}
-				}
-			}
-
-			if chunk == "" {
-				if c, newBufOffset := server.Default.ReadProcessLog(id, int(bufOffset)); c != "" {
-					chunk = c
-					bufOffset = int64(newBufOffset)
-					source = "console"
 				}
 			}
 

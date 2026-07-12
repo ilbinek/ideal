@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"os"
 	"sync"
 )
@@ -12,6 +13,7 @@ type sessionLogWriter struct {
 	file *os.File
 	buf  []byte
 	max  int
+	last []byte // last Write payload; used to drop stdout+stderr echoes
 }
 
 func newSessionLogWriter(file *os.File, maxBytes int) *sessionLogWriter {
@@ -24,6 +26,14 @@ func newSessionLogWriter(file *os.File, maxBytes int) *sessionLogWriter {
 func (w *sessionLogWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	// os/exec copies stdout and stderr on separate goroutines into the same
+	// writer. Arma often emits the same line on both fds; drop exact consecutive
+	// duplicates so session logs are not doubled.
+	if len(p) > 0 && bytes.Equal(p, w.last) {
+		return len(p), nil
+	}
+	w.last = append(w.last[:0], p...)
 
 	if w.file != nil {
 		if _, err := w.file.Write(p); err != nil {
