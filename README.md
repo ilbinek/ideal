@@ -1,208 +1,230 @@
 # IDEAL
-## ilbinek's Dedicated Environment for Arma Linux
 
-A web-based Arma 3 mod manager for downloading, organizing, and managing mods from Steam Workshop using DepotDownloader. Supports modsets, automatic key extraction, and A3Sync folder generation.
+**ilbinek's Dedicated Environment for Arma**
+
+A web-based Arma 3 **dedicated server manager**: install server branches, run and stop server instances, download Workshop mods, import launcher modsets, and generate A3Sync repositories. Runs on Linux and Windows.
 
 ---
 
-## ⚠️ Disclaimer
+## Disclaimer
 
-The frontend is vibecoded (quickly built for functionality over perfection). Contributions to improve the UI/UX are welcome!
+The frontend was built quickly for functionality over polish. Contributions that improve UI/UX are welcome.
+
+---
+
+## Features
+
+- **Branches** — install Arma 3 dedicated server builds via SteamCMD (stable or Steam beta branch)
+- **Servers** — create instances, assign mods, edit config/profiles, upload missions, start/stop/restart, live logs
+- **Mods** — download from Steam Workshop (built-in gosteam, DepotDownloader, or SteamCMD), update checks, download queue
+- **Modsets** — import Arma 3 Launcher HTML presets
+- **A3Sync** — generate a symlink-based repository from downloaded mods
 
 ---
 
 ## Prerequisites
 
-### Required Tools
+### Always required for server installs
 
-1. **A downloader** - one of the following, selectable in Settings:
-   - **DepotDownloader** (default) - [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader).
-     Reports per-file download progress.
-   - **SteamCMD** - [SteamCMD docs](https://developer.valvesoftware.com/wiki/SteamCMD).
-     Progress is coarse (stage messages, then 100%).
-   - Each must be on your system `PATH`, or you can set an explicit path to the
-     executable in **Settings → Downloader** (blank = use `PATH`).
-   - The application will fail to download mods if the selected downloader cannot
-     be found.
+- **SteamCMD** on `PATH` (or set its path in **Settings**) — used to install dedicated server **branches**
 
-2. **Steam Account Credentials**
-   - You'll need Steam credentials configured in settings
-   - The account must have Steam Guard disabled
-   - It's recomeneded to use a dedicated Steam account for this automation, credentials are saved as plain text in the DB
+### Mod downloader (pick one in Settings)
+
+| Downloader | Notes |
+|---|---|
+| **Built-in (gosteam)** — default | No external binary. Log in via Settings (credentials or QR). Supports Steam Guard. Session token stored under `.gosteam/`. |
+| **DepotDownloader** | [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader) on `PATH` or an explicit path in Settings. Per-file progress. |
+| **SteamCMD** | Same binary as branch installs. Coarse progress; workshop items are moved into `./mods/<id>` after download. |
+
+For DepotDownloader / SteamCMD mod downloads, Steam username and password are stored in the SQLite DB (plain text). Prefer a dedicated Steam account. The built-in downloader does **not** require storing a password long-term once logged in.
+
+A Steam Web API key (Settings) is used for update checks.
 
 ---
 
-## Installation
+## Installation (release)
 
-1. Download the appropriate release for your platform
-2. Extract the archive
-3. Run the executable:
+1. Download the release for your platform and extract it
+2. Edit `config.json` and change `password` from `changeme` (Ideal **refuses to start** until you do)
+3. Run the binary:
    ```bash
    # Linux
    ./ideal
-   
+
    # Windows
    ideal.exe
    ```
-4. Access the web interface at `http://localhost:8080` (default port)
-5. Login with defined password (configurable in config.json)
+4. Open `http://localhost:8080` (or the port in `config.json`)
+5. Log in with the password you set
 
 ---
 
 ## Configuration
 
-### First Time Setup
+### `config.json`
 
-1. Navigate to **Settings** page
-2. Configure your Steam credentials:
-   - **Username**: Your Steam username
-   - **Password**: Your Steam password
-   - **API Key**: Steam Web API key for update checking
+```json
+{
+  "password": "changeme",
+  "port": "8080"
+}
+```
+
+Steam credentials, downloader choice, and related options live in the SQLite database and are edited in the **Settings** UI — not in `config.json`.
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `IDEAL_LISTEN` | Override HTTP bind address (e.g. `127.0.0.1:8080`). Default is all interfaces on the configured port (`:8080`). |
+| `IDEAL_DATA_DIR` | Override the data root (config, DB, mods, servers, branches). |
 
 ---
 
-## Usage Guide
+## Usage
 
-### 1. Uploading Modsets
+### 1. Install a server branch
 
-Modsets are HTML presets exported from the Arma 3 Launcher.
+1. Open **Branches**
+2. Create a branch (name + optional Steam beta branch)
+3. Install it — Ideal uses SteamCMD to download the dedicated server (app `233780`)
 
-**Steps:**
-1. In Arma 3 Launcher, create a preset with your desired mods
-2. Click **Export** and save the HTML file
-3. In IDEAL, go to **Modsets** page
-4. Click **Upload New Modset**
-5. Select the `.html` preset file
-6. The modset will be parsed and all mods will be added to the database
+### 2. Create and run a server
 
-### 2. Managing Mods
+1. Open **Servers** → create a server (pick a branch, ports, optional modset)
+2. On the server detail page, assign client/server mods, edit config, upload missions as needed
+3. Click **Start** — Ideal provisions the instance (`servers/<slug>/`), copies keys, and launches the process
+4. Use **Stop** / **Restart** from the UI; live status updates over SSE
+5. **Logs** tab tails session output and RPT files
 
-**Download Mods:**
-- Navigate to the **Mods** page
-- Click **Download** next to any mod to fetch it from Steam Workshop
-- Real-time progress tracking shows download status
-- Downloaded mods are stored in the `./mods` directory
+Default ports per server: game `2302`, Steam query `2303` (Steam defaults to game port + 1 if omitted).
 
-**Check for Updates:**
-- Click **Check Updates** to scan all mods for newer versions
-- Mods with available updates will be highlighted
-- Re-download to update to the latest version
+After Ideal restarts, transitional statuses are reconciled (e.g. a stuck `stopping` after a reboot becomes `stopped` when the process is gone).
 
-**Delete Mods:**
-- Click **Delete** to remove a mod and free up disk space
-- This removes the mod files and database entry
+### 3. Mods and modsets
 
-### 3. Server Startup Configuration
+**Modsets:** export an HTML preset from the Arma 3 Launcher → **Modsets** → upload. Mods are added to the database.
 
-**Generate Startup Parameters:**
-1. Go to **Home** page or click a modset
-2. Click **Generate Startup Command**
-3. You'll see:
-   - **Mod Parameter**: The `-mod=` parameter line for your Arma 3 server
-   - **Keys Path**: Location of extracted `.bikey` files
-   - **Full Example Command**: Complete server start command
+**Mods page:**
+- Download individual mods or enqueue missing/outdated ones
+- Check for updates (needs Steam API key)
+- Add a mod by Workshop ID
+- Delete mods to free disk space
 
-**Copy the mod parameter line and use it in your server startup script.**
+Downloaded mods live under `./mods/<workshopId>/`. An `./addons/` tree of lowercased symlinks is maintained for server provisioning.
 
-### 4. Managing Keys
+### 4. Keys
 
-When you generate the startup command, IDEAL automatically:
-1. Scans all downloaded mods for `.bikey` files
-2. Copies them to the `./keys` directory
-3. Displays the path in the startup command page
+For **managed servers**, `.bikey` files are copied into `servers/<slug>/keys/` automatically when the instance is provisioned. You do not need to copy keys by hand for Ideal-started servers.
 
-**Important:** 
-- After copying the mod parameter, **manually copy all `.bikey` files** from the displayed keys directory to your Arma 3 server's `keys/` folder
-- This is required for the server to verify mod signatures
-- Keys must match the mods in your mod parameter
+### 5. A3Sync folder
 
-### 5. A3Sync Folder Generation
-#### Linux only
-
-A3Sync is a repository system for distributing Arma 3 mods to players.
-
-**Generate A3Sync Structure:**
-1. Go to **Mods** page
+1. Open **Mods**
 2. Click **Generate A3Sync Folder**
-3. IDEAL creates an `./a3sync` directory with:
-   - File-level symlinks to all mod files (space-efficient)
-   - Proper folder structure for A3Sync repository
-   - All downloaded mods included automatically
+3. Ideal creates `./a3sync` with file-level symlinks to downloaded mods
 
-**Using the A3Sync Folder:**
-- Point your A3Sync server configuration to the `./a3sync` directory
-- Players can sync mods directly from your repository
-- Symlinks mean no duplicate files (saves disk space)
-- Updates to mods in `./mods` are reflected in `./a3sync`
+Point your A3Sync repository at that directory. On Windows, creating symlinks may require elevated privileges.
 
 ---
 
-## Directory Structure
+## Directory structure
 
 ```
 .
-├── ideal (or ideal.exe)       # Main executable
-├── config.json                # Application configuration
-├── mods/                      # Downloaded mods (Workshop ID folders)
-│   ├── 450814997/            # Example: CBA_A3
-│   └── 463939057/            # Example: ACE3
-├── keys/                      # Extracted .bikey files
-├── a3sync/                    # A3Sync repository (generated)
-└── database.db               # SQLite database
+├── ideal / ideal.exe     # Main executable (release) or under dist/ when built with Task
+├── config.json           # Web UI password + HTTP port
+├── arma3mods.db          # SQLite database
+├── .gosteam/             # Built-in downloader token/cache
+├── mods/                 # Workshop mods (<workshopId>/)
+├── addons/               # Lowercased symlink mirrors for provisioning
+├── keys/                 # Keys for legacy/manual startup-command flows
+├── a3sync/               # Generated A3Sync repository
+├── arma3/branches/       # Installed dedicated server branches
+├── servers/<slug>/       # Per-server instances (configs, mods, logs, missions)
+├── web/                  # React SPA source
+├── web/dist/             # Built SPA (embedded via go:embed; not committed)
+└── dist/                 # task build / task run output
 ```
 
-The web UI (a React single-page app) is compiled into `web/dist` and embedded
-directly in the binary via `go:embed`, so no separate asset folders need to ship
-alongside the executable. Frontend source lives in `web/` and is built with
-[Task](https://taskfile.dev) (`task build` builds the SPA and the binary; see
-the Taskfile for `dev`/`web:dev`/`lint` targets).
+The SPA is embedded in the binary with `go:embed`, so releases do not ship a separate `web/dist` folder.
 
+---
+
+## Development
+
+Requires [Task](https://taskfile.dev), Go (see `go.mod`), Node.js/npm, and a C compiler (**CGO** is required for SQLite).
+
+```bash
+git clone https://gitea.tbdevent.eu/ilbinek/ideal.git
+cd ideal
+task install
+```
+
+### Useful tasks
+
+| Task | Description |
+|---|---|
+| `task install` | Download Go modules and install frontend deps |
+| `task dev` | Run the Go API with `IDEAL_LISTEN=127.0.0.1:8080` |
+| `task web:dev` | Vite dev server (proxies `/api` → `:8080`) |
+| `task web:build` | Build the SPA into `web/dist` |
+| `task build` | Build SPA (if needed) + binary → `dist/ideal` |
+| `task run` | Build if sources changed, then run `dist/ideal` |
+| `task build:all` | Cross-compile Linux/Windows amd64/arm64 into `dist/` |
+| `task lint` | `go vet` + frontend typecheck |
+| `task clean` | Remove `web/dist` and `dist` |
+
+### Dev workflow (hot-reload UI)
+
+```bash
+# Terminal 1 — API
+task dev
+
+# Terminal 2 — frontend
+task web:dev
+```
+
+Open `http://localhost:5173` (Vite). The API listens on `127.0.0.1:8080`.
+
+### Production-like local run
+
+```bash
+# Edit config.json password first
+task run
+```
+
+Opens Ideal with the embedded UI on the port from `config.json` (all interfaces unless `IDEAL_LISTEN` is set).
+
+Do **not** use bare `go build` without building the SPA first — the binary embeds `web/dist`, which is produced by `task web:build` / `task build`.
 
 ---
 
 ## Troubleshooting
 
-**"DepotDownloader not found" / "steamcmd download failed"**
-- Ensure the selected downloader is installed and on your system PATH, or set an
-  explicit path in **Settings → Downloader**
-- Test by running `DepotDownloader` (or `steamcmd`) in a terminal
-- SteamCMD writes items to `<steamcmd>/steamapps/workshop/content/107410/<id>`;
-  the app moves them into `./mods/<id>` automatically after a successful run
+**"Default password is still in use"**  
+Change `password` in `config.json` away from `changeme`.
 
-**Download fails with authentication error**
-- Verify Steam credentials in Settings
-- Some accounts may require Steam Guard approval
-- Check if your account owns Arma 3
+**Downloader / Steam login issues**  
+- Built-in: complete Steam login in Settings (Guard/QR supported)  
+- DepotDownloader / SteamCMD: ensure the binary is on `PATH` or set the path in Settings  
 
-**Symlink creation fails (A3Sync)**
-- On Windows, you may need Administrator privileges
-- On Linux, ensure proper file permissions
+**Branch install fails**  
+SteamCMD must be available; Steam credentials in Settings must be valid for the dedicated server download.
 
-**Mods not appearing in startup command**
-- Ensure mods are fully downloaded
-- Check that mod directories exist in `./mods`
-- Refresh the page after downloads complete
+**Server stuck or `unknown` after reboot**  
+Ideal reconciles statuses on startup. If a process is gone, status should settle to `stopped` / `unknown`. Use Stop/Start from the UI if needed.
 
----
+**Empty or broken UI after `go build`**  
+Build the frontend first (`task web:build` or `task build`).
 
-## Building from Source
+**A3Sync symlink errors on Windows**  
+Run with privileges that allow creating symlinks, or enable Developer Mode.
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd modmanager
-
-# Build
-go build -o ideal .
-
-# Run
-./ideal
-```
+**CGO / sqlite build errors**  
+Install a C toolchain (e.g. gcc) and ensure `CGO_ENABLED=1`.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome, especially for frontend improvements!
-
----
+Issues and pull requests are welcome, especially for frontend improvements. Run `task lint` before submitting.
