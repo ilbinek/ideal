@@ -40,6 +40,7 @@ type Manager struct {
 type runningInstance struct {
 	serverID       int
 	pid            int
+	proc           *managedProc
 	startedAt      time.Time
 	rptPath        string
 	sessionLog     *sessionLogWriter
@@ -229,7 +230,7 @@ func (m *Manager) Start(serverID int) error {
 	}
 	sessionLog := newSessionLogWriter(sessionFile, 512*1024)
 
-	pid, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
+	proc, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
 	if err != nil {
 		_ = sessionLog.Close()
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
@@ -244,7 +245,8 @@ func (m *Manager) Start(serverID int) error {
 	m.mu.Lock()
 	m.instances[serverID] = &runningInstance{
 		serverID:       serverID,
-		pid:            pid,
+		pid:            proc.pid,
+		proc:           proc,
 		startedAt:      startTime,
 		rptPath:        rptPath,
 		sessionLog:     sessionLog,
@@ -252,7 +254,7 @@ func (m *Manager) Start(serverID int) error {
 	}
 	m.mu.Unlock()
 
-	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, pid, rptPath)
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, proc.pid, rptPath)
 	m.broadcast()
 
 	go m.watchServer(serverID)
@@ -279,7 +281,7 @@ func (m *Manager) Stop(serverID int) error {
 	}
 
 	if err := stopProcess(inst.pid); err != nil {
-		if ServerAlive(inst.pid, gamePort) {
+		if !inst.proc.exited() && ServerAlive(inst.pid, gamePort) {
 			// Still running — revert so status cannot stay stuck on "stopping".
 			_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, inst.pid, inst.rptPath)
 			m.broadcast()
@@ -287,6 +289,9 @@ func (m *Manager) Stop(serverID int) error {
 		}
 		// Process already gone; treat as a successful stop.
 	}
+
+	// Ensure the child is Wait()'d so it cannot remain a zombie.
+	_ = inst.proc.wait(5 * time.Second)
 
 	m.mu.Lock()
 	m.closeInstanceLog(inst)
@@ -372,7 +377,7 @@ func (m *Manager) watchServer(serverID int) {
 		time.Sleep(pollInterval)
 
 		m.mu.Lock()
-		_, tracked := m.instances[serverID]
+		inst, tracked := m.instances[serverID]
 		m.mu.Unlock()
 		if !tracked {
 			return
@@ -383,7 +388,14 @@ func (m *Manager) watchServer(serverID int) {
 			return
 		}
 
-		if ServerAlive(srv.PID, srv.GamePort) {
+		// Prefer the Wait() result: once reaped, the PID is gone. Port fallback
+		// still covers Arma leaving a child bound after the launcher exits.
+		if inst.proc != nil && inst.proc.exited() {
+			if IsPortInUse(srv.GamePort) {
+				consecutiveDead = 0
+				continue
+			}
+		} else if ServerAlive(srv.PID, srv.GamePort) {
 			consecutiveDead = 0
 			continue
 		}
@@ -397,6 +409,9 @@ func (m *Manager) watchServer(serverID int) {
 
 	m.mu.Lock()
 	if inst, ok := m.instances[serverID]; ok {
+		if inst.proc != nil {
+			_ = inst.proc.wait(2 * time.Second)
+		}
 		m.closeInstanceLog(inst)
 	}
 	delete(m.instances, serverID)
@@ -413,5 +428,5 @@ func (m *Manager) watchServer(serverID int) {
 
 func processRunning(pid int) bool {
 	ok, _ := osFindProcess(pid)
-	return ok
+	return ok && !processIsZombie(pid)
 }

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func startProcess(binary string, args []string, workDir string, capture io.Writer) (int, error) {
+func startProcess(binary string, args []string, workDir string, capture io.Writer) (*managedProc, error) {
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = workDir
 	out := io.Writer(os.Stdout)
@@ -21,9 +21,14 @@ func startProcess(binary string, args []string, workDir string, capture io.Write
 	cmd.Stderr = out
 
 	if err := cmd.Start(); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return cmd.Process.Pid, nil
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	return &managedProc{pid: cmd.Process.Pid, done: done}, nil
 }
 
 func stopProcess(pid int) error {
@@ -39,15 +44,15 @@ func stopProcess(pid int) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return proc.Kill()
-}
-
-func waitProcess(pid int) {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return
+	_ = proc.Kill()
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processRunning(pid) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	_, _ = proc.Wait()
+	return nil
 }
 
 func osFindProcess(pid int) (bool, error) {
@@ -61,4 +66,8 @@ func osFindProcess(pid int) (bool, error) {
 	}
 	_ = syscall.CloseHandle(h)
 	return true, nil
+}
+
+func processIsZombie(pid int) bool {
+	return false
 }
