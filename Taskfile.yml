@@ -59,8 +59,22 @@ tasks:
     deps:
       - web:build
       - mkdist
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - "{{.WEB_DIR}}/dist/**/*"
+    generates:
+      - "{{.DIST_DIR}}/{{.BINARY}}{{exeExt}}"
     cmds:
       - go build -o {{.DIST_DIR}}/{{.BINARY}}{{exeExt}} .
+
+  run:
+    desc: Build if sources changed, then run the Ideal binary
+    deps:
+      - build
+    cmds:
+      - "{{.DIST_DIR}}/{{.BINARY}}{{exeExt}}"
 
   build:all:
     desc: Cross-compile release binaries for all target platforms into dist/
