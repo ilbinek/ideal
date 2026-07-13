@@ -171,13 +171,14 @@ func GetServersHandler(w http.ResponseWriter, r *http.Request) {
 
 func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name         string `json:"name"`
-		BranchID     int    `json:"branchId"`
-		ModsetID     *int   `json:"modsetId"`
-		GamePort     int    `json:"gamePort"`
-		SteamPort    int    `json:"steamPort"`
-		ProfileName  string `json:"profileName"`
-		ServerBinary string `json:"serverBinary"`
+		Name          string `json:"name"`
+		BranchID      int    `json:"branchId"`
+		ModsetID      *int   `json:"modsetId"`
+		GamePort      int    `json:"gamePort"`
+		SteamPort     int    `json:"steamPort"`
+		ProfileName   string `json:"profileName"`
+		ServerBinary  string `json:"serverBinary"`
+		LocalModsRoot string `json:"localModsRoot"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -205,7 +206,7 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return false
 	})
 
-	id, err := database.CreateServer(body.Name, slug, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary)
+	id, err := database.CreateServer(body.Name, slug, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.LocalModsRoot)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create server: "+err.Error())
 		return
@@ -252,6 +253,7 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		SteamPort         int    `json:"steamPort"`
 		ProfileName       string `json:"profileName"`
 		ServerBinary      string `json:"serverBinary"`
+		LocalModsRoot     string `json:"localModsRoot"`
 		ExtraLaunchParams string `json:"extraLaunchParams"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -264,7 +266,8 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modsetChanged := !modsetIDsEqual(existing.ModsetID, body.ModsetID)
-	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.ExtraLaunchParams); err != nil {
+	rootChanged := strings.TrimSpace(existing.LocalModsRoot) != strings.TrimSpace(body.LocalModsRoot)
+	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.LocalModsRoot, body.ExtraLaunchParams); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update server")
 		return
 	}
@@ -273,11 +276,28 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 			if err := database.SeedServerModsFromModset(id, *body.ModsetID); err != nil {
 				log.Printf("[SERVER] failed to seed mods from modset: %v", err)
 			}
-		} else if err := database.ReplaceServerMods(id, []database.ServerMod{}); err != nil {
-			log.Printf("[SERVER] failed to clear mods after modset removal: %v", err)
+		} else {
+			// Clear workshop/custom assignments but keep local_root rows.
+			existingMods, _ := database.GetServerMods(id)
+			var preserved []database.ServerMod
+			for _, m := range existingMods {
+				if m.Source == database.ServerModSourceLocalRoot {
+					preserved = append(preserved, m)
+				}
+			}
+			if err := database.ReplaceServerMods(id, preserved); err != nil {
+				log.Printf("[SERVER] failed to clear mods after modset removal: %v", err)
+			}
 		}
 		if err := server.ProvisionServer(id); err != nil {
 			log.Printf("[SERVER] provision after modset update: %v", err)
+		}
+	} else if rootChanged {
+		if err := server.SyncLocalModsRoot(id, true); err != nil {
+			log.Printf("[SERVER] local mods sync after root change: %v", err)
+		}
+		if err := server.ProvisionServer(id); err != nil {
+			log.Printf("[SERVER] provision after local mods root change: %v", err)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -463,6 +483,8 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 		CustomPath  string `json:"customPath"`
 		Label       string `json:"label"`
 		IsServerMod bool   `json:"isServerMod"`
+		Enabled     *bool  `json:"enabled"`
+		Source      string `json:"source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -474,7 +496,16 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 		if item.ModID == nil && item.CustomPath == "" {
 			continue
 		}
-		if item.CustomPath != "" {
+		enabled := true
+		if item.Enabled != nil {
+			enabled = *item.Enabled
+		}
+		source := item.Source
+		if source == "" && item.ModID == nil && item.CustomPath != "" {
+			source = database.ServerModSourceCustom
+		}
+		// Skip path validation for disabled or auto-managed local_root rows.
+		if item.CustomPath != "" && enabled && source != database.ServerModSourceLocalRoot {
 			if err := server.ValidateCustomModPath(item.CustomPath); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -486,6 +517,8 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 			CustomPath:  item.CustomPath,
 			Label:       item.Label,
 			IsServerMod: item.IsServerMod,
+			Enabled:     enabled,
+			Source:      source,
 		})
 	}
 
@@ -495,6 +528,26 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := server.ProvisionServer(id); err != nil {
 		log.Printf("[SERVER] provision after mod update: %v", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func SyncLocalModsHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	if _, err := database.GetServer(id); err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err := server.SyncLocalModsRoot(id, true); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to sync local mods: "+err.Error())
+		return
+	}
+	if err := server.ProvisionServer(id); err != nil {
+		log.Printf("[SERVER] provision after local mods sync: %v", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

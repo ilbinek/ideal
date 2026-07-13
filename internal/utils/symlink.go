@@ -26,78 +26,11 @@ func SyncModToAddons(modPath string) error {
 	if modPath == "" {
 		return fmt.Errorf("mod path is empty")
 	}
-
 	addonsModPath := AddonsModPath(modPath)
-
 	log.Printf("[SYMLINK] Syncing mod from %s to %s", modPath, addonsModPath)
-
-	// Walk through the mod directory
-	err := filepath.Walk(modPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Get relative path from modPath
-		relPath, err := filepath.Rel(modPath, path)
-		if err != nil {
-			return err
-		}
-
-		// Skip the root directory itself
-		if relPath == "." {
-			return nil
-		}
-
-		// Create lowercase version of the relative path
-		relPathLower := strings.ToLower(relPath)
-		targetPath := filepath.Join(addonsModPath, relPathLower)
-
-		if info.IsDir() {
-			// Create directory
-			log.Printf("[SYMLINK] Creating directory: %s", targetPath)
-			if err := os.MkdirAll(targetPath, 0755); err != nil {
-				return fmt.Errorf("failed to create directory %s: %v", targetPath, err)
-			}
-		} else {
-			// Create parent directory if needed
-			targetDir := filepath.Dir(targetPath)
-			if err := os.MkdirAll(targetDir, 0755); err != nil {
-				return fmt.Errorf("failed to create parent directory %s: %v", targetDir, err)
-			}
-
-			// Get absolute paths for symlink
-			absModPath, err := filepath.Abs(path)
-			if err != nil {
-				return fmt.Errorf("failed to get absolute path for %s: %v", path, err)
-			}
-
-			absTargetPath, err := filepath.Abs(targetPath)
-			if err != nil {
-				return fmt.Errorf("failed to get absolute path for %s: %v", targetPath, err)
-			}
-
-			// Remove existing symlink if it exists
-			if _, err := os.Lstat(absTargetPath); err == nil {
-				log.Printf("[SYMLINK] Removing existing symlink: %s", absTargetPath)
-				if err := os.Remove(absTargetPath); err != nil {
-					log.Printf("[SYMLINK] Warning: failed to remove existing symlink: %v", err)
-				}
-			}
-
-			// Create symlink
-			log.Printf("[SYMLINK] Creating symlink: %s -> %s", absTargetPath, absModPath)
-			if err := os.Symlink(absModPath, absTargetPath); err != nil {
-				return fmt.Errorf("failed to create symlink from %s to %s: %v", absTargetPath, absModPath, err)
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
+	if err := SyncModMirror(modPath, addonsModPath); err != nil {
 		return fmt.Errorf("failed to sync mod to addons: %v", err)
 	}
-
 	log.Printf("[SYMLINK] Successfully synced mod to addons directory")
 	return nil
 }

@@ -183,6 +183,7 @@ export const api = {
       steamPort: number;
       profileName: string;
       serverBinary: string;
+      localModsRoot: string;
       extraLaunchParams: string;
     },
   ) =>
@@ -190,6 +191,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  syncLocalMods: (id: number) =>
+    request<{ ok: boolean }>(`/api/servers/${id}/localmods/sync`, { method: "POST" }),
   deleteServer: (id: number) =>
     request<{ ok: boolean }>(`/api/servers/${id}`, { method: "DELETE" }),
   provisionServer: (id: number) =>

@@ -58,9 +58,7 @@ func ValidateCustomModPath(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("path is not a directory")
 	}
-	hasModCpp := fileExists(filepath.Join(path, "mod.cpp"))
-	hasAddons := dirExists(filepath.Join(path, "addons"))
-	if !hasModCpp && !hasAddons {
+	if !utils.LooksLikeArmaMod(path) {
 		return fmt.Errorf("path does not look like an Arma mod (missing mod.cpp or addons/)")
 	}
 	return nil
@@ -128,7 +126,11 @@ func SanitizeModLabel(label string) string {
 
 // ModLinkName returns the symlink folder name and source path for a server mod entry.
 // Managed mods symlink from the lowercased addons mirror, not the raw mods download folder.
-func ModLinkName(sm database.ServerMod) (linkName, srcPath string, ok bool) {
+// Local-root mods symlink from servers/<slug>/localmods/<name>/.
+func ModLinkName(slug string, sm database.ServerMod) (linkName, srcPath string, ok bool) {
+	if !sm.Enabled {
+		return "", "", false
+	}
 	if sm.ModID != nil {
 		mod, err := database.GetMod(*sm.ModID)
 		if err != nil || !mod.Downloaded || mod.LocalPath == "" {
@@ -150,7 +152,23 @@ func ModLinkName(sm database.ServerMod) (linkName, srcPath string, ok bool) {
 		if err := ValidateCustomModPath(sm.CustomPath); err != nil {
 			return "", "", false
 		}
-		return filepath.Base(sm.CustomPath), sm.CustomPath, true
+		if sm.Source == database.ServerModSourceLocalRoot {
+			linkName = strings.ToLower(filepath.Base(sm.CustomPath))
+			srcPath = utils.LocalModsMirrorPath(slug, sm.CustomPath)
+			if _, err := os.Stat(srcPath); err != nil {
+				return "", "", false
+			}
+			return linkName, srcPath, true
+		}
+		// Manual custom path: still mirror into localmods for lowercase Linux safety.
+		linkName = strings.ToLower(filepath.Base(sm.CustomPath))
+		srcPath = utils.LocalModsMirrorPath(slug, sm.CustomPath)
+		if _, err := os.Stat(srcPath); err != nil {
+			if syncErr := utils.SyncModMirror(sm.CustomPath, srcPath); syncErr != nil {
+				return "", "", false
+			}
+		}
+		return linkName, srcPath, true
 	}
 	return "", "", false
 }

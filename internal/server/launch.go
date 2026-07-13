@@ -51,7 +51,7 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 		"-name=" + profileNameArg,
 	}
 
-	modParam, serverModParam := buildModParams(instanceDir, serverID)
+	modParam, serverModParam := buildModParams(instanceDir, serverID, srv.Slug)
 	if modParam != "" {
 		args = append(args, "-mod="+modParam)
 	}
@@ -74,7 +74,7 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 	}, nil
 }
 
-func buildModParams(instanceDir string, serverID int) (modParam, serverModParam string) {
+func buildModParams(instanceDir string, serverID int, slug string) (modParam, serverModParam string) {
 	serverMods, err := database.GetServerMods(serverID)
 	if err != nil {
 		return "", ""
@@ -84,7 +84,10 @@ func buildModParams(instanceDir string, serverID int) (modParam, serverModParam 
 	var clientMods, serverModsList []string
 
 	for _, sm := range serverMods {
-		linkName, _, ok := ModLinkName(sm)
+		if !sm.Enabled {
+			continue
+		}
+		linkName, _, ok := ModLinkName(slug, sm)
 		if !ok {
 			continue
 		}

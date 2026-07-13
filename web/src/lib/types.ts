@@ -100,6 +100,7 @@ export interface GameServer {
   steamPort: number;
   profileName: string;
   serverBinary: string;
+  localModsRoot: string;
   extraLaunchParams: string;
   status: ServerStatus;
   pid: number;
@@ -115,6 +116,8 @@ export interface ServerMod {
   customPath?: string;
   label: string;
   isServerMod: boolean;
+  enabled?: boolean;
+  source?: string;
   sortOrder?: number;
 }
 

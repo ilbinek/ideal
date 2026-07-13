@@ -78,6 +78,7 @@ func APIHandler() http.Handler {
 	// Server mods
 	mux.HandleFunc("GET /api/servers/{id}/mods", apiAuth(GetServerModsHandler))
 	mux.HandleFunc("PUT /api/servers/{id}/mods", apiAuth(PutServerModsHandler))
+	mux.HandleFunc("POST /api/servers/{id}/localmods/sync", apiAuth(SyncLocalModsHandler))
 
 	// Server keys
 	mux.HandleFunc("GET /api/servers/{id}/keys", apiAuth(GetServerKeysHandler))

@@ -211,6 +211,7 @@ function OverviewTab({
     steamPort: number;
     profileName: string;
     serverBinary: string;
+    localModsRoot: string;
     extraLaunchParams: string;
   };
 }) {
@@ -229,6 +230,7 @@ function OverviewTab({
   const [steamPort, setSteamPort] = useState(String(srv.steamPort));
   const [profileName, setProfileName] = useState(srv.profileName);
   const [serverBinary, setServerBinary] = useState(srv.serverBinary ?? "");
+  const [localModsRoot, setLocalModsRoot] = useState(srv.localModsRoot ?? "");
   const [extra, setExtra] = useState(srv.extraLaunchParams);
 
   const branchIdNum = parseInt(branchId, 10);
@@ -246,6 +248,10 @@ function OverviewTab({
     setServerBinary(srv.serverBinary ?? "");
   }, [srv.serverBinary]);
 
+  useEffect(() => {
+    setLocalModsRoot(srv.localModsRoot ?? "");
+  }, [srv.localModsRoot]);
+
   const save = useMutation({
     mutationFn: () =>
       api.updateServer(serverId, {
@@ -256,6 +262,7 @@ function OverviewTab({
         steamPort: parseInt(steamPort, 10),
         profileName,
         serverBinary,
+        localModsRoot,
         extraLaunchParams: extra,
       }),
     onSuccess: () => {
@@ -269,6 +276,15 @@ function OverviewTab({
   const provision = useMutation({
     mutationFn: () => api.provisionServer(serverId),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+    },
+  });
+
+  const syncLocal = useMutation({
+    mutationFn: () => api.syncLocalMods(serverId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
       queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
       queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
     },
@@ -326,6 +342,18 @@ function OverviewTab({
             </p>
           </div>
           <div className="flex flex-col gap-1">
+            <Label>Local mods root</Label>
+            <Input
+              value={localModsRoot}
+              onChange={(e) => setLocalModsRoot(e.target.value)}
+              placeholder="/path/to/addons-root"
+            />
+            <p className="text-xs text-muted-foreground">
+              Folder whose subfolders are Arma mods (each with an addons/ dir). They are
+              auto-assigned and mirrored under this server&apos;s localmods/.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1">
             <Label>Modset</Label>
             <select
               className="rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -340,7 +368,7 @@ function OverviewTab({
               ))}
             </select>
             <p className="text-xs text-muted-foreground">
-              Changing the modset reloads mods and keys from that modset on save.
+              Changing the modset reloads workshop mods from that modset on save (local mods are kept).
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -361,7 +389,7 @@ function OverviewTab({
             <Label>Extra launch params</Label>
             <Input value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="-nosound" />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
               Save
             </Button>
@@ -372,6 +400,19 @@ function OverviewTab({
               disabled={provision.isPending}
             >
               <RefreshCw className="size-3.5" /> Re-provision
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => syncLocal.mutate()}
+              disabled={syncLocal.isPending || !localModsRoot.trim()}
+            >
+              {syncLocal.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Rescan local mods
             </Button>
           </div>
         </CardContent>
@@ -431,7 +472,7 @@ function ModsTab({ serverId }: { serverId: number }) {
     if (!mod) return;
     setMods((prev) => [
       ...prev,
-      { modId, label: mod.name, isServerMod: false },
+      { modId, label: mod.name, isServerMod: false, enabled: true, source: "" },
     ]);
   };
 
@@ -439,9 +480,21 @@ function ModsTab({ serverId }: { serverId: number }) {
     if (!customPath.trim()) return;
     setMods((prev) => [
       ...prev,
-      { customPath: customPath.trim(), label: customPath.split(/[/\\]/).pop() ?? "custom", isServerMod: false },
+      {
+        customPath: customPath.trim(),
+        label: customPath.split(/[/\\]/).pop() ?? "custom",
+        isServerMod: false,
+        enabled: true,
+        source: "custom",
+      },
     ]);
     setCustomPath("");
+  };
+
+  const sourceLabel = (m: ServerMod) => {
+    if (m.source === "local_root") return `Local · ${m.customPath ?? ""}`;
+    if (m.modId) return `Workshop #${m.modId}`;
+    return m.customPath ?? "Custom";
   };
 
   return (
@@ -449,6 +502,10 @@ function ModsTab({ serverId }: { serverId: number }) {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Add mods</CardTitle>
+          <CardDescription>
+            Workshop and one-off custom paths. Mods from the local mods root are managed on
+            the Overview tab and listed below.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex flex-1 flex-col gap-1">
@@ -499,6 +556,7 @@ function ModsTab({ serverId }: { serverId: number }) {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Enabled</TableHead>
                   <TableHead>Label</TableHead>
                   <TableHead>Source</TableHead>
                   <TableHead>Server mod</TableHead>
@@ -507,10 +565,26 @@ function ModsTab({ serverId }: { serverId: number }) {
               </TableHeader>
               <TableBody>
                 {mods.map((m, i) => (
-                  <TableRow key={i}>
+                  <TableRow
+                    key={i}
+                    className={m.enabled === false ? "opacity-50" : undefined}
+                  >
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        checked={m.enabled !== false}
+                        onChange={(e) =>
+                          setMods((prev) =>
+                            prev.map((x, j) =>
+                              j === i ? { ...x, enabled: e.target.checked } : x,
+                            ),
+                          )
+                        }
+                      />
+                    </TableCell>
                     <TableCell>{m.label}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {m.modId ? `Workshop #${m.modId}` : m.customPath}
+                    <TableCell className="max-w-[240px] truncate text-xs text-muted-foreground">
+                      {sourceLabel(m)}
                     </TableCell>
                     <TableCell>
                       <input
@@ -526,13 +600,17 @@ function ModsTab({ serverId }: { serverId: number }) {
                       />
                     </TableCell>
                     <TableCell>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setMods((prev) => prev.filter((_, j) => j !== i))}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
+                      {m.source === "local_root" ? (
+                        <span className="text-xs text-muted-foreground">Disable to skip</span>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setMods((prev) => prev.filter((_, j) => j !== i))}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

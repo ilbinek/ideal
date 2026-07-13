@@ -32,7 +32,7 @@ func ProvisionServer(serverID int) error {
 	}
 
 	// Instance-owned directories
-	for _, sub := range []string{"profiles", "keys", "mpmissions", "mods", "servermods", "logs"} {
+	for _, sub := range []string{"profiles", "keys", "mpmissions", "mods", "servermods", "logs", "localmods"} {
 		if err := os.MkdirAll(filepath.Join(instanceDir, sub), 0755); err != nil {
 			return err
 		}
@@ -57,6 +57,11 @@ func ProvisionServer(serverID int) error {
 		if err := os.WriteFile(basicCfgPath, []byte(DefaultBasicCfg()), 0644); err != nil {
 			return err
 		}
+	}
+
+	// Refresh local mods mirror + DB rows when the source root changed.
+	if err := SyncLocalModsRoot(serverID, false); err != nil {
+		return err
 	}
 
 	// Symlink branch game files into instance (from steamapps/common/... when applicable)
@@ -96,6 +101,10 @@ func provisionMods(instanceDir string, serverID int) error {
 		return err
 	}
 
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return err
+	}
 	serverMods, err := database.GetServerMods(serverID)
 	if err != nil {
 		return err
@@ -103,7 +112,10 @@ func provisionMods(instanceDir string, serverID int) error {
 
 	usedNames := make(map[string]int)
 	for _, sm := range serverMods {
-		linkName, srcPath, ok := ModLinkName(sm)
+		if !sm.Enabled {
+			continue
+		}
+		linkName, srcPath, ok := ModLinkName(srv.Slug, sm)
 		if !ok {
 			if sm.ModID != nil {
 				log.Printf("[PROVISION] skipping mod %d: not downloaded", *sm.ModID)
@@ -163,6 +175,9 @@ func provisionKeys(instanceDir string, serverID int) error {
 
 	var modPaths []string
 	for _, sm := range serverMods {
+		if !sm.Enabled {
+			continue
+		}
 		if sm.ModID != nil {
 			mod, err := database.GetMod(*sm.ModID)
 			if err == nil && mod.Downloaded && mod.LocalPath != "" {
@@ -174,6 +189,13 @@ func provisionKeys(instanceDir string, serverID int) error {
 				}
 			}
 		} else if sm.CustomPath != "" {
+			if sm.Source == database.ServerModSourceLocalRoot {
+				mirror := utils.LocalModsMirrorPath(srv.Slug, sm.CustomPath)
+				if _, err := os.Stat(mirror); err == nil {
+					modPaths = append(modPaths, mirror)
+					continue
+				}
+			}
 			modPaths = append(modPaths, sm.CustomPath)
 		}
 	}
