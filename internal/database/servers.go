@@ -132,6 +132,9 @@ func migrateServers() error {
 	if err := ensureCreatorDlcBranch(); err != nil {
 		return err
 	}
+	if err := removeInvalidCreativeDevBranch(); err != nil {
+		return err
+	}
 	if err := fixPerformanceBranchCode(); err != nil {
 		return err
 	}
@@ -213,8 +216,6 @@ func branchSlug(name, installPath string) string {
 		return "main"
 	case "Performance":
 		return "performance"
-	case "Creative Dev":
-		return "creativedev"
 	case "Creator DLC":
 		return "creatordlc"
 	default:
@@ -235,7 +236,6 @@ func seedDefaultBranches() error {
 	}{
 		{"Main", "", "main"},
 		{"Performance", "profiling", "performance"},
-		{"Creative Dev", "creativedev", "creativedev"},
 		{"Creator DLC", "creatordlc", "creatordlc"},
 	}
 	for _, d := range defaults {
@@ -268,6 +268,30 @@ func ensureCreatorDlcBranch() error {
 		"INSERT INTO arma_branches (name, steam_branch, install_path) VALUES (?, ?, ?)",
 		"Creator DLC", "creatordlc", path,
 	)
+	return err
+}
+
+// removeInvalidCreativeDevBranch drops the legacy Creative Dev seed when unused.
+// creativedev is not a valid Arma 3 Server Steam beta (use creatordlc instead).
+func removeInvalidCreativeDevBranch() error {
+	var id int
+	err := db.QueryRow(
+		`SELECT id FROM arma_branches WHERE steam_branch = 'creativedev' OR name = 'Creative Dev' LIMIT 1`,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var servers int
+	if err := db.QueryRow("SELECT COUNT(*) FROM servers WHERE branch_id = ?", id).Scan(&servers); err != nil {
+		return err
+	}
+	if servers > 0 {
+		return nil
+	}
+	_, err = db.Exec("DELETE FROM arma_branches WHERE id = ?", id)
 	return err
 }
 

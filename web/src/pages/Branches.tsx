@@ -165,7 +165,7 @@ export function Branches() {
         <CardHeader>
           <CardTitle className="text-base">Add branch</CardTitle>
           <CardDescription>
-            Steam beta name (e.g. profiling, creativedev, creatordlc). Leave empty for main.
+            Steam beta name (e.g. profiling, creatordlc). Leave empty for main.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-end">
