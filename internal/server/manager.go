@@ -257,7 +257,7 @@ func (m *Manager) Start(serverID int) error {
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, proc.pid, rptPath)
 	m.broadcast()
 
-	go m.watchServer(serverID)
+	go m.watchServer(serverID, startTime, proc.pid)
 	return nil
 }
 
@@ -328,8 +328,29 @@ func (m *Manager) closeInstanceLog(inst *runningInstance) {
 
 // Restart stops then starts a server.
 func (m *Manager) Restart(serverID int) error {
-	_ = m.Stop(serverID)
-	time.Sleep(2 * time.Second)
+	if err := m.Stop(serverID); err != nil {
+		return err
+	}
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return err
+	}
+	// Wait for ports to free; a fixed sleep is often too short after Arma exits.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		gameFree := IsPortAvailable(srv.GamePort)
+		steamFree := IsPortAvailable(srv.SteamPort)
+		if gameFree && steamFree {
+			break
+		}
+		if time.Now().After(deadline) {
+			if !gameFree {
+				return fmt.Errorf("game port %d still in use after stop", srv.GamePort)
+			}
+			return fmt.Errorf("steam port %d still in use after stop", srv.SteamPort)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	return m.Start(serverID)
 }
 
@@ -368,7 +389,7 @@ func (m *Manager) ActiveSessionLogPath(serverID int) string {
 	return ""
 }
 
-func (m *Manager) watchServer(serverID int) {
+func (m *Manager) watchServer(serverID int, startedAt time.Time, pid int) {
 	const pollInterval = 2 * time.Second
 	const deadThreshold = 2
 
@@ -378,8 +399,10 @@ func (m *Manager) watchServer(serverID int) {
 
 		m.mu.Lock()
 		inst, tracked := m.instances[serverID]
+		sameGen := tracked && inst.startedAt.Equal(startedAt) && inst.pid == pid
 		m.mu.Unlock()
-		if !tracked {
+		if !tracked || !sameGen {
+			// Stop/Restart already replaced or removed this instance.
 			return
 		}
 
@@ -395,7 +418,7 @@ func (m *Manager) watchServer(serverID int) {
 				consecutiveDead = 0
 				continue
 			}
-		} else if ServerAlive(srv.PID, srv.GamePort) {
+		} else if ServerAlive(pid, srv.GamePort) {
 			consecutiveDead = 0
 			continue
 		}
@@ -408,12 +431,15 @@ func (m *Manager) watchServer(serverID int) {
 	}
 
 	m.mu.Lock()
-	if inst, ok := m.instances[serverID]; ok {
-		if inst.proc != nil {
-			_ = inst.proc.wait(30 * time.Second)
-		}
-		m.closeInstanceLog(inst)
+	inst, ok := m.instances[serverID]
+	if !ok || !inst.startedAt.Equal(startedAt) || inst.pid != pid {
+		m.mu.Unlock()
+		return
 	}
+	if inst.proc != nil {
+		_ = inst.proc.wait(30 * time.Second)
+	}
+	m.closeInstanceLog(inst)
 	delete(m.instances, serverID)
 	m.mu.Unlock()
 
