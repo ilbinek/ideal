@@ -921,6 +921,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   const { text, activePath } = useServerLogs(serverId, isRunning);
   const logRef = useRef<HTMLPreElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [view, setView] = useState<"live" | "file">(isRunning ? "live" : "file");
   const logs = useQuery({
     queryKey: ["serverLogs", serverId],
     queryFn: () => api.listServerLogs(serverId),
@@ -929,18 +930,33 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   const [selected, setSelected] = useState<string | null>(null);
   const [archived, setArchived] = useState("");
 
-  const viewerText = isRunning ? text || "Waiting for log output..." : archived || "Select a log file";
+  useEffect(() => {
+    if (isRunning) {
+      setView((v) => (v === "file" && selected ? "file" : "live"));
+    } else {
+      setView("file");
+    }
+  }, [isRunning, selected]);
+
+  const showingLive = isRunning && view === "live";
+  const viewerText = showingLive
+    ? text || "Waiting for log output..."
+    : archived || "Select a log file";
 
   useEffect(() => {
     if (!autoScroll || !logRef.current) return;
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [viewerText, autoScroll]);
 
-  const loadArchived = useCallback(async (name: string) => {
-    setSelected(name);
-    const data = await api.getServerLog(serverId, name, 0);
-    setArchived(data.content);
-  }, [serverId]);
+  const loadArchived = useCallback(
+    async (name: string) => {
+      setSelected(name);
+      setView("file");
+      const data = await api.getServerLog(serverId, name, 0);
+      setArchived(data.content);
+    },
+    [serverId],
+  );
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">
@@ -953,11 +969,33 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
         </CardHeader>
         <CardContent className="max-h-96 overflow-y-auto">
           <ul className="text-sm">
+            {isRunning && (
+              <li>
+                <button
+                  type="button"
+                  className={`mb-1 w-full rounded px-2 py-1 text-left hover:bg-accent ${
+                    showingLive ? "bg-accent" : ""
+                  }`}
+                  onClick={() => setView("live")}
+                >
+                  <div className="font-medium">Live tail</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {activePath
+                      ? activePath === "console"
+                        ? "Live server output"
+                        : activePath
+                      : "Streaming…"}
+                  </div>
+                </button>
+              </li>
+            )}
             {(logs.data ?? []).map((l) => (
               <li key={l.name}>
                 <button
                   type="button"
-                  className="w-full rounded px-2 py-1 text-left hover:bg-accent"
+                  className={`w-full rounded px-2 py-1 text-left hover:bg-accent ${
+                    !showingLive && selected === l.name ? "bg-accent" : ""
+                  }`}
                   onClick={() => loadArchived(l.name)}
                 >
                   <div className="font-medium">{l.name}</div>
@@ -978,9 +1016,9 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
           <div>
             <CardTitle className="text-base">
-              {isRunning ? "Live tail" : selected ? selected : "Log viewer"}
+              {showingLive ? "Live tail" : selected ? selected : "Log viewer"}
             </CardTitle>
-            {activePath && isRunning && (
+            {showingLive && activePath && (
               <CardDescription className="truncate text-xs">
                 {activePath === "console" ? "Live server output" : activePath}
               </CardDescription>

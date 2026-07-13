@@ -231,6 +231,11 @@ func FindNewestRPT(slug string) (string, error) {
 
 // TailLog reads new content from a file starting at offset.
 func TailLog(path string, offset int64) (string, int64, error) {
+	return TailLogLimited(path, offset, 64*1024)
+}
+
+// TailLogLimited is like TailLog but caps how much is read in one call.
+func TailLogLimited(path string, offset, maxRead int64) (string, int64, error) {
 	f, err := openLogFile(path)
 	if err != nil {
 		return "", offset, err
@@ -249,9 +254,12 @@ func TailLog(path string, offset int64) (string, int64, error) {
 		return "", offset, err
 	}
 
+	if maxRead <= 0 {
+		maxRead = 64 * 1024
+	}
 	toRead := size - offset
-	if toRead > 64*1024 {
-		toRead = 64 * 1024
+	if toRead > maxRead {
+		toRead = maxRead
 	}
 	if toRead <= 0 {
 		return "", size, nil
@@ -262,7 +270,45 @@ func TailLog(path string, offset int64) (string, int64, error) {
 	if err != nil && err != io.EOF {
 		return "", offset, err
 	}
-	return string(buf[:n]), size, nil
+	return string(buf[:n]), offset + int64(n), nil
+}
+
+// ReadLogTail returns up to maxBytes from the end of path, aligned to a newline
+// when truncated. The returned size is the file size (next live-tail offset).
+func ReadLogTail(path string, maxBytes int64) (content string, size int64, err error) {
+	if maxBytes <= 0 {
+		maxBytes = 256 * 1024
+	}
+	f, err := openLogFile(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	size = info.Size()
+	offset := int64(0)
+	if size > maxBytes {
+		offset = size - maxBytes
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return "", size, err
+	}
+	buf := make([]byte, size-offset)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", size, err
+	}
+	buf = buf[:n]
+	if offset > 0 {
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 && i+1 < len(buf) {
+			buf = buf[i+1:]
+		}
+	}
+	return string(buf), size, nil
 }
 
 // WaitForRPT polls until a new .rpt appears or timeout.

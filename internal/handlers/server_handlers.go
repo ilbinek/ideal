@@ -877,9 +877,12 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const liveSeedBytes = 256 * 1024
+
 	var rptOffset int64
 	var sessionOffset int64
 	rptLocked := false
+	sessionSeeded := false
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -889,57 +892,64 @@ func ServerLogStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	send := func(chunk, source string) {
+		if chunk == "" {
+			return
+		}
+		data, _ := json.Marshal(map[string]string{"chunk": chunk, "path": source})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			var chunk, source string
-
 			rptPath := server.ResolveRPTPath(srv.Slug, server.Default.ActiveRPTPath(id))
 			if rptPath != "" {
 				if !rptLocked {
-					// Switch to RPT exclusively. Start at EOF so we do not replay
-					// lines already shown from the session/console capture.
-					if info, err := os.Stat(rptPath); err == nil {
-						rptOffset = info.Size()
+					// Seed with recent history, then live-tail from EOF.
+					chunk, size, err := server.ReadLogTail(rptPath, liveSeedBytes)
+					if err == nil {
+						rptOffset = size
 						rptLocked = true
+						send(chunk, rptPath)
+					}
+					continue
+				}
+				c, newOffset, err := server.TailLog(rptPath, rptOffset)
+				if err == nil {
+					rptOffset = newOffset
+					if c != "" {
+						send(c, rptPath)
 					}
 				}
-				if rptLocked {
-					c, newOffset, err := server.TailLog(rptPath, rptOffset)
-					if err == nil && c != "" {
-						chunk = c
-						rptOffset = newOffset
-						source = rptPath
-					}
-					// Never fall back to session after locking — same lines often
-					// appear in both and would show up as duplicates.
-					if chunk == "" {
-						continue
-					}
-				}
-			}
-
-			if chunk == "" {
-				sessionPath := server.Default.ActiveSessionLogPath(id)
-				if sessionPath != "" {
-					c, newOffset, err := server.TailLog(sessionPath, sessionOffset)
-					if err == nil && c != "" {
-						chunk = c
-						sessionOffset = newOffset
-						source = sessionPath
-					}
-				}
-			}
-
-			if chunk == "" {
+				// Never fall back to session after locking — same lines often
+				// appear in both and would show up as duplicates.
 				continue
 			}
 
-			data, _ := json.Marshal(map[string]string{"chunk": chunk, "path": source})
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+			sessionPath := server.Default.ActiveSessionLogPath(id)
+			if sessionPath == "" {
+				continue
+			}
+			if !sessionSeeded {
+				chunk, size, err := server.ReadLogTail(sessionPath, liveSeedBytes)
+				if err == nil {
+					sessionOffset = size
+					sessionSeeded = true
+					send(chunk, sessionPath)
+				}
+				continue
+			}
+			c, newOffset, err := server.TailLog(sessionPath, sessionOffset)
+			if err == nil {
+				sessionOffset = newOffset
+				if c != "" {
+					send(c, sessionPath)
+				}
+			}
 		}
 	}
 }
