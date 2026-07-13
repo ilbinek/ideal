@@ -3,6 +3,7 @@ import type {
   Downloader,
   DownloadScope,
   GameServer,
+  HeadlessClientsResponse,
   LaunchArgs,
   LogContent,
   LogEntry,
@@ -293,6 +294,35 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(url);
   },
+
+  // Headless clients
+  getHeadless: (id: number) =>
+    request<HeadlessClientsResponse>(`/api/servers/${id}/headless`),
+  setHeadlessCount: (id: number, count: number) =>
+    request<HeadlessClientsResponse>(`/api/servers/${id}/headless`, {
+      method: "PUT",
+      body: JSON.stringify({ count }),
+    }),
+  startHeadless: (id: number, slot: number) =>
+    request<{ ok: boolean }>(`/api/servers/${id}/headless/${slot}/start`, {
+      method: "POST",
+    }),
+  stopHeadless: (id: number, slot: number) =>
+    request<{ ok: boolean }>(`/api/servers/${id}/headless/${slot}/stop`, {
+      method: "POST",
+    }),
+  restartHeadless: (id: number, slot: number) =>
+    request<{ ok: boolean }>(`/api/servers/${id}/headless/${slot}/restart`, {
+      method: "POST",
+    }),
+  listHeadlessLogs: (id: number, slot: number) =>
+    request<LogEntry[]>(`/api/servers/${id}/headless/${slot}/logs`),
+  getHeadlessLog: (id: number, slot: number, filename: string, offset?: number) =>
+    request<LogContent>(
+      `/api/servers/${id}/headless/${slot}/logs/${encodeURIComponent(filename)}${
+        offset != null ? `?offset=${offset}` : ""
+      }`,
+    ),
 
   // Missions
   listMissions: (id: number) => request<LogEntry[]>(`/api/servers/${id}/missions`),

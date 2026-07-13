@@ -34,6 +34,42 @@ export function useServerLogs(serverId: number, enabled: boolean) {
   return { lines, activePath, text: lines.join("") };
 }
 
+export function useHeadlessLogs(serverId: number, slot: number, enabled: boolean) {
+  const [lines, setLines] = React.useState<string[]>([]);
+  const [activePath, setActivePath] = React.useState("");
+
+  React.useEffect(() => {
+    if (!enabled || !serverId || slot < 1) {
+      setLines([]);
+      setActivePath("");
+      return;
+    }
+    setLines([]);
+    setActivePath("");
+    const source = new EventSource(
+      `/api/servers/${serverId}/headless/${slot}/logs/stream`,
+    );
+    source.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data) as { chunk: string; path: string };
+        if (data.path) setActivePath(data.path);
+        if (data.chunk) {
+          setLines((prev) => {
+            const next = [...prev, data.chunk];
+            if (next.length > 500) return next.slice(-400);
+            return next;
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => source.close();
+  }, [serverId, slot, enabled]);
+
+  return { lines, activePath, text: lines.join("") };
+}
+
 export function useBranchInstall() {
   const [snapshot, setSnapshot] = React.useState({
     branchId: 0,

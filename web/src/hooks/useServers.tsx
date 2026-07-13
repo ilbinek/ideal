@@ -3,6 +3,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AllServersSnapshot,
   GameServer,
+  HeadlessClientSnapshot,
   ServerStatus,
   ServerStatusSnapshot,
 } from "@/lib/types";
@@ -12,9 +13,11 @@ const empty: AllServersSnapshot = { servers: [] };
 const ServersContext = React.createContext<{
   snapshot: AllServersSnapshot;
   statusFor: (id: number) => ServerStatusSnapshot | undefined;
+  headlessFor: (id: number) => HeadlessClientSnapshot[];
 }>({
   snapshot: empty,
   statusFor: () => undefined,
+  headlessFor: () => [],
 });
 
 export function useServers() {
@@ -90,8 +93,13 @@ export function ServersProvider({ children }: { children: React.ReactNode }) {
     [snapshot],
   );
 
+  const headlessFor = React.useCallback(
+    (id: number) => snapshot.servers.find((s) => s.id === id)?.headless ?? [],
+    [snapshot],
+  );
+
   return (
-    <ServersContext.Provider value={{ snapshot, statusFor }}>
+    <ServersContext.Provider value={{ snapshot, statusFor, headlessFor }}>
       {children}
     </ServersContext.Provider>
   );

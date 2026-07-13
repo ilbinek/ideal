@@ -176,6 +176,8 @@ maxPlayers = 32;
 verifySignatures = 2;
 allowedFilePatching = 0;
 BattlEye = 1;
+headlessClients[] = {"127.0.0.1"};
+localClient[] = {"127.0.0.1"};
 `, hostname)
 }
 

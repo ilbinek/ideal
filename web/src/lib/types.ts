@@ -101,6 +101,7 @@ export interface GameServer {
   profileName: string;
   serverBinary: string;
   extraLaunchParams: string;
+  headlessCount: number;
   status: ServerStatus;
   pid: number;
   activeRpt: string;
@@ -133,6 +134,22 @@ export interface ServerKeysResponse {
   auto: string[];
 }
 
+export interface HeadlessClientSnapshot {
+  serverId: number;
+  slot: number;
+  profileName: string;
+  status: ServerStatus;
+  pid: number;
+  activeRpt: string;
+  uptime: number;
+  startedAt?: string;
+}
+
+export interface HeadlessClientsResponse {
+  count: number;
+  clients: HeadlessClientSnapshot[];
+}
+
 export interface ServerStatusSnapshot {
   id: number;
   name: string;
@@ -142,6 +159,7 @@ export interface ServerStatusSnapshot {
   activeRpt: string;
   uptime: number;
   startedAt?: string;
+  headless?: HeadlessClientSnapshot[];
 }
 
 export interface AllServersSnapshot {

@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"arma3modmanager/internal/database"
@@ -72,6 +73,79 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 		Args:           args,
 		WorkingDir:     instanceDir,
 	}, nil
+}
+
+// BuildHeadlessLaunchArgs constructs launch arguments for one headless client slot.
+func BuildHeadlessLaunchArgs(serverID, slot int) (*LaunchArgs, error) {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return nil, err
+	}
+	hc, err := database.GetHeadlessClient(serverID, slot)
+	if err != nil {
+		return nil, fmt.Errorf("headless client slot %d not found", slot)
+	}
+
+	branch, err := database.GetBranch(srv.BranchID)
+	if err != nil {
+		return nil, err
+	}
+
+	instanceDir := InstanceDir(srv.Slug)
+	binaryRel, ok := ResolveServerBinary(branch.InstallPath, srv.ServerBinary)
+	if !ok {
+		if strings.TrimSpace(srv.ServerBinary) != "" {
+			return nil, fmt.Errorf("server binary %q not found in branch %q", srv.ServerBinary, branch.Name)
+		}
+		return nil, fmt.Errorf("branch %q is not installed", branch.Name)
+	}
+	binaryName := filepath.Base(filepath.FromSlash(binaryRel))
+	binaryPath := filepath.Join(instanceDir, binaryName)
+
+	profileName := strings.TrimSpace(hc.ProfileName)
+	if profileName == "" {
+		profileName = database.HeadlessProfileName(srv.Name, srv.Slug, slot)
+	}
+
+	args := []string{
+		"-client",
+		"-connect=127.0.0.1",
+		"-port=" + fmt.Sprint(srv.GamePort),
+		"-profiles=profiles",
+		"-name=" + profileName,
+	}
+	if password := ParseServerCfgPassword(srv.Slug); password != "" {
+		args = append(args, "-password="+password)
+	}
+
+	modParam, _ := buildModParams(instanceDir, serverID, srv.Slug)
+	if modParam != "" {
+		args = append(args, "-mod="+modParam)
+	}
+
+	cmdParts := append([]string{"./" + filepath.ToSlash(binaryName)}, formatCommandArgs(args)...)
+	return &LaunchArgs{
+		Command:    strings.Join(cmdParts, " "),
+		ModParam:   modParam,
+		Binary:     binaryPath,
+		Args:       args,
+		WorkingDir: instanceDir,
+	}, nil
+}
+
+var serverCfgPasswordRe = regexp.MustCompile(`(?im)^\s*password\s*=\s*"([^"]*)"\s*;`)
+
+// ParseServerCfgPassword reads password = "..." from the instance server.cfg.
+func ParseServerCfgPassword(slug string) string {
+	content, err := ReadConfigFile(slug, "server.cfg")
+	if err != nil {
+		return ""
+	}
+	m := serverCfgPasswordRe.FindStringSubmatch(content)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
 }
 
 func buildModParams(instanceDir string, serverID int, slug string) (modParam, serverModParam string) {

@@ -100,6 +100,16 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}", apiAuth(GetServerLogHandler))
 	mux.HandleFunc("DELETE /api/servers/{id}/logs/{filename}", apiAuth(DeleteServerLogHandler))
 
+	// Headless clients
+	mux.HandleFunc("GET /api/servers/{id}/headless", apiAuth(GetHeadlessHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/headless", apiAuth(PutHeadlessHandler))
+	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/start", apiAuth(StartHeadlessHandler))
+	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/stop", apiAuth(StopHeadlessHandler))
+	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/restart", apiAuth(RestartHeadlessHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs", apiAuth(ListHeadlessLogsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/stream", apiAuth(HeadlessLogStreamHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/{filename}", apiAuth(GetHeadlessLogHandler))
+
 	// Missions
 	mux.HandleFunc("GET /api/servers/{id}/missions", apiAuth(ListMissionsHandler))
 	mux.HandleFunc("POST /api/servers/{id}/missions/upload", apiAuth(UploadMissionHandler))

@@ -14,14 +14,15 @@ import (
 
 // StatusSnapshot is the runtime status of one server.
 type StatusSnapshot struct {
-	ID        int       `json:"id"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	Status    string    `json:"status"`
-	PID       int       `json:"pid"`
-	ActiveRPT string    `json:"activeRpt"`
-	Uptime    int64     `json:"uptime"` // seconds, 0 if not running
-	StartedAt time.Time `json:"startedAt,omitempty"`
+	ID        int                      `json:"id"`
+	Name      string                   `json:"name"`
+	Slug      string                   `json:"slug"`
+	Status    string                   `json:"status"`
+	PID       int                      `json:"pid"`
+	ActiveRPT string                   `json:"activeRpt"`
+	Uptime    int64                    `json:"uptime"` // seconds, 0 if not running
+	StartedAt time.Time                `json:"startedAt,omitempty"`
+	Headless  []HeadlessStatusSnapshot `json:"headless,omitempty"`
 }
 
 // AllStatusSnapshot is broadcast to SSE subscribers.
@@ -33,6 +34,7 @@ type AllStatusSnapshot struct {
 type Manager struct {
 	mu        sync.Mutex
 	instances map[int]*runningInstance
+	headless  map[hcKey]*runningHeadless
 
 	subMu sync.Mutex
 	subs  map[chan AllStatusSnapshot]struct{}
@@ -52,6 +54,7 @@ type runningInstance struct {
 // Default is the process-wide server manager.
 var Default = &Manager{
 	instances: make(map[int]*runningInstance),
+	headless:  make(map[hcKey]*runningHeadless),
 	subs:      make(map[chan AllStatusSnapshot]struct{}),
 }
 
@@ -60,6 +63,7 @@ var nextInstanceGen uint64
 // Init reconciles DB state on startup.
 func Init() {
 	ReconcileStatuses()
+	ReconcileHeadlessStatuses()
 }
 
 // ReconcileStatuses settles orphaned DB statuses on startup. Servers still bound
@@ -107,8 +111,15 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 		return AllStatusSnapshot{Servers: []StatusSnapshot{}}
 	}
 
+	allHC, _ := database.GetAllHeadlessClients()
+	hcByServer := make(map[int][]database.HeadlessClient)
+	for _, c := range allHC {
+		hcByServer[c.ServerID] = append(hcByServer[c.ServerID], c)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureHCMap()
 
 	var snaps []StatusSnapshot
 	for _, s := range servers {
@@ -127,6 +138,27 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 			if !inst.startedAt.IsZero() {
 				snap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 			}
+		}
+		for _, c := range hcByServer[s.ID] {
+			hcSnap := HeadlessStatusSnapshot{
+				ServerID:    c.ServerID,
+				Slot:        c.Slot,
+				ProfileName: c.ProfileName,
+				Status:      c.Status,
+				PID:         c.PID,
+				ActiveRPT:   c.ActiveRPT,
+			}
+			if inst, ok := m.headless[hcKey{s.ID, c.Slot}]; ok {
+				hcSnap.PID = inst.pid
+				hcSnap.ActiveRPT = inst.rptPath
+				hcSnap.ProfileName = inst.profileName
+				hcSnap.StartedAt = inst.startedAt
+				hcSnap.Status = database.ServerStatusRunning
+				if !inst.startedAt.IsZero() {
+					hcSnap.Uptime = int64(time.Since(inst.startedAt).Seconds())
+				}
+			}
+			snap.Headless = append(snap.Headless, hcSnap)
 		}
 		snaps = append(snaps, snap)
 	}
@@ -276,6 +308,12 @@ func (m *Manager) Start(serverID int) error {
 
 	go m.watchServer(serverID, gen)
 	go m.resolveRPT(serverID, gen, startTime)
+
+	// Start configured headless clients after the dedicated server is up.
+	go func() {
+		time.Sleep(2 * time.Second)
+		m.StartAllHeadless(serverID)
+	}()
 	return nil
 }
 
@@ -350,6 +388,8 @@ func (m *Manager) resolveRPT(serverID int, gen uint64, startTime time.Time) {
 
 // Stop stops a running server.
 func (m *Manager) Stop(serverID int) error {
+	m.StopAllHeadless(serverID)
+
 	m.mu.Lock()
 	inst, ok := m.instances[serverID]
 	m.mu.Unlock()
@@ -544,6 +584,8 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 	m.closeInstanceLog(inst)
 	delete(m.instances, serverID)
 	m.mu.Unlock()
+
+	m.StopAllHeadless(serverID)
 
 	srv, _ := database.GetServer(serverID)
 	activeRPT := ""

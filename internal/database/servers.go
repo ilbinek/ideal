@@ -40,6 +40,7 @@ type Server struct {
 	ProfileName       string    `json:"profileName"`
 	ServerBinary      string    `json:"serverBinary"`
 	ExtraLaunchParams string    `json:"extraLaunchParams"`
+	HeadlessCount     int       `json:"headlessCount"`
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
 	ActiveRPT         string    `json:"activeRpt"`
@@ -133,13 +134,17 @@ func migrateServers() error {
 	if err := migrateBranchInstallPaths(); err != nil {
 		return err
 	}
-	return migrateServerColumns()
+	if err := migrateServerColumns(); err != nil {
+		return err
+	}
+	return migrateHeadless()
 }
 
 func migrateServerColumns() error {
 	alters := []string{
 		"ALTER TABLE servers ADD COLUMN server_binary TEXT DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN local_mods_root TEXT DEFAULT ''",
+		"ALTER TABLE servers ADD COLUMN headless_count INTEGER DEFAULT 0",
 		"ALTER TABLE server_mods ADD COLUMN enabled BOOLEAN DEFAULT 1",
 		"ALTER TABLE server_mods ADD COLUMN source TEXT DEFAULT ''",
 	}
@@ -315,6 +320,7 @@ func GetServers() ([]Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
 		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(headless_count, 0),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers ORDER BY name`)
 	if err != nil {
@@ -328,6 +334,7 @@ func GetServer(id int) (*Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
 		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(headless_count, 0),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers WHERE id = ?`, id)
 	if err != nil {
@@ -351,7 +358,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 		var modsetID sql.NullInt64
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
-			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams,
+			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &s.HeadlessCount,
 			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -382,7 +389,11 @@ func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, stea
 }
 
 func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, extraLaunchParams string) error {
-	_, err := db.Exec(`
+	srv, err := GetServer(id)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`
 		UPDATE servers SET name = ?, branch_id = ?, modset_id = ?, game_port = ?, steam_port = ?,
 			profile_name = ?, server_binary = ?, extra_launch_params = ?,
 			updated_at = CURRENT_TIMESTAMP
@@ -390,7 +401,13 @@ func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, st
 		name, branchID, modsetID, gamePort, steamPort, profileName,
 		strings.TrimSpace(serverBinary), extraLaunchParams, id,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if name != srv.Name {
+		return RefreshHeadlessProfileNames(id, name, srv.Slug)
+	}
+	return nil
 }
 
 func UpdateServerStatus(id int, status string, pid int, activeRPT string) error {
@@ -583,6 +600,7 @@ func GetServersUsingPort(gamePort, steamPort int, excludeID int) ([]Server, erro
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
 		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(headless_count, 0),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers WHERE id != ? AND (game_port = ? OR steam_port = ? OR game_port = ? OR steam_port = ?)`,
 		excludeID, gamePort, steamPort, steamPort, gamePort,

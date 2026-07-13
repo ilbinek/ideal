@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
-import { useServerLogs } from "@/hooks/useServerLogs";
+import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
 import { formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -36,9 +36,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { ServerMod } from "@/lib/types";
+import type { HeadlessClientSnapshot, ServerMod, ServerStatus } from "@/lib/types";
 
-type Tab = "overview" | "mods" | "keys" | "config" | "logs" | "missions";
+type Tab = "overview" | "mods" | "keys" | "config" | "logs" | "headless" | "missions";
 
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
@@ -130,6 +130,7 @@ export function ServerDetail() {
     { id: "keys", label: "Keys" },
     { id: "config", label: "Config" },
     { id: "logs", label: "Logs" },
+    { id: "headless", label: "Headless Clients" },
     { id: "missions", label: "Missions" },
   ];
 
@@ -220,6 +221,9 @@ export function ServerDetail() {
       {tab === "keys" && <KeysTab serverId={serverId} />}
       {tab === "config" && <ConfigTab serverId={serverId} serverStatus={status} />}
       {tab === "logs" && <LogsTab serverId={serverId} isRunning={isRunning} />}
+      {tab === "headless" && (
+        <HeadlessTab serverId={serverId} serverRunning={isRunning} />
+      )}
       {tab === "missions" && <MissionsTab serverId={serverId} />}
     </div>
   );
@@ -290,6 +294,7 @@ function OverviewTab({
       queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
       queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
       queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["headless", serverId] });
     },
   });
 
@@ -1286,6 +1291,379 @@ function MissionsTab({ serverId }: { serverId: number }) {
               )}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function statusBadge(status: ServerStatus) {
+  return <Badge variant="secondary">{status}</Badge>;
+}
+
+function HeadlessTab({
+  serverId,
+  serverRunning,
+}: {
+  serverId: number;
+  serverRunning: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const { headlessFor } = useServers();
+  const liveClients = headlessFor(serverId);
+
+  const headless = useQuery({
+    queryKey: ["headless", serverId],
+    queryFn: () => api.getHeadless(serverId),
+    refetchInterval: (query) => {
+      const clients = query.state.data?.clients ?? [];
+      return clients.some((c) => c.status === "starting" || c.status === "stopping")
+        ? 2000
+        : false;
+    },
+  });
+
+  const [countInput, setCountInput] = useState("0");
+  const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
+  const [actionError, setActionError] = useState("");
+
+  useEffect(() => {
+    if (headless.data) {
+      setCountInput(String(headless.data.count));
+    }
+  }, [headless.data?.count]);
+
+  // Prefer live SSE status, fall back to REST payload.
+  const bySlot = new Map<number, HeadlessClientSnapshot>();
+  for (const c of headless.data?.clients ?? []) {
+    bySlot.set(c.slot, c);
+  }
+  for (const c of liveClients) {
+    bySlot.set(c.slot, c);
+  }
+  const mergedClients = Array.from(bySlot.values()).sort((a, b) => a.slot - b.slot);
+  const slotKey = mergedClients.map((c) => c.slot).join(",");
+
+  useEffect(() => {
+    if (!slotKey) {
+      setSelectedSlot(null);
+      return;
+    }
+    const slots = slotKey.split(",").map((s) => parseInt(s, 10));
+    setSelectedSlot((prev) =>
+      prev != null && slots.includes(prev) ? prev : slots[0],
+    );
+  }, [slotKey]);
+
+  const selected = mergedClients.find((c) => c.slot === selectedSlot) ?? null;
+  const hcRunning =
+    selected?.status === "running" || selected?.status === "starting";
+
+  const setCount = useMutation({
+    mutationFn: () => api.setHeadlessCount(serverId, parseInt(countInput, 10) || 0),
+    onSuccess: () => {
+      setActionError("");
+      queryClient.invalidateQueries({ queryKey: ["headless", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Failed to update count");
+    },
+  });
+
+  const startHc = useMutation({
+    mutationFn: (slot: number) => api.startHeadless(serverId, slot),
+    onSuccess: () => {
+      setActionError("");
+      queryClient.invalidateQueries({ queryKey: ["headless", serverId] });
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Start failed");
+    },
+  });
+
+  const stopHc = useMutation({
+    mutationFn: (slot: number) => api.stopHeadless(serverId, slot),
+    onSuccess: () => {
+      setActionError("");
+      queryClient.invalidateQueries({ queryKey: ["headless", serverId] });
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Stop failed");
+    },
+  });
+
+  const restartHc = useMutation({
+    mutationFn: (slot: number) => api.restartHeadless(serverId, slot),
+    onSuccess: () => {
+      setActionError("");
+      queryClient.invalidateQueries({ queryKey: ["headless", serverId] });
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Restart failed");
+    },
+  });
+
+  const busy =
+    setCount.isPending ||
+    startHc.isPending ||
+    stopHc.isPending ||
+    restartHc.isPending;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Headless clients</CardTitle>
+          <CardDescription>
+            Run local headless clients against this server (
+            <code className="text-xs">-client -connect=127.0.0.1</code>
+            ). They start automatically when the dedicated server starts.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="hc-count">Count</Label>
+              <Input
+                id="hc-count"
+                type="number"
+                min={0}
+                max={16}
+                className="w-28"
+                value={countInput}
+                onChange={(e) => setCountInput(e.target.value)}
+              />
+            </div>
+            <Button
+              size="sm"
+              disabled={busy || !Number.isFinite(parseInt(countInput, 10))}
+              onClick={() => setCount.mutate()}
+            >
+              {setCount.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : null}
+              Apply
+            </Button>
+            {!serverRunning && (parseInt(countInput, 10) || 0) > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Start the dedicated server to launch headless clients.
+              </p>
+            )}
+          </div>
+
+          {actionError && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {actionError}
+            </p>
+          )}
+
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Profile</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>PID</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {mergedClients.map((c) => {
+                const running = c.status === "running" || c.status === "starting";
+                return (
+                  <TableRow
+                    key={c.slot}
+                    className={selectedSlot === c.slot ? "bg-accent/40" : undefined}
+                    onClick={() => setSelectedSlot(c.slot)}
+                  >
+                    <TableCell className="font-medium">{c.profileName}</TableCell>
+                    <TableCell>{statusBadge(c.status)}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {c.pid > 0 ? c.pid : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div
+                        className="flex justify-end gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy || (!serverRunning && !running)}
+                          onClick={() =>
+                            running ? stopHc.mutate(c.slot) : startHc.mutate(c.slot)
+                          }
+                        >
+                          {running ? (
+                            <Square className="size-3.5" />
+                          ) : (
+                            <Play className="size-3.5" />
+                          )}
+                          {running ? "Stop" : "Start"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy || !serverRunning}
+                          onClick={() => restartHc.mutate(c.slot)}
+                        >
+                          <RotateCcw className="size-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {!mergedClients.length && (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-muted-foreground">
+                    No headless clients configured. Set a count above to create slots.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {selected && (
+        <HeadlessLogsPanel
+          serverId={serverId}
+          slot={selected.slot}
+          profileName={selected.profileName}
+          isRunning={!!hcRunning}
+        />
+      )}
+    </div>
+  );
+}
+
+function HeadlessLogsPanel({
+  serverId,
+  slot,
+  profileName,
+  isRunning,
+}: {
+  serverId: number;
+  slot: number;
+  profileName: string;
+  isRunning: boolean;
+}) {
+  const { text, activePath } = useHeadlessLogs(serverId, slot, isRunning);
+  const logRef = useRef<HTMLPreElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [view, setView] = useState<"live" | "file">(isRunning ? "live" : "file");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [archived, setArchived] = useState("");
+
+  const logs = useQuery({
+    queryKey: ["headlessLogs", serverId, slot],
+    queryFn: () => api.listHeadlessLogs(serverId, slot),
+    refetchInterval: isRunning ? 2000 : false,
+  });
+
+  useEffect(() => {
+    setSelected(null);
+    setArchived("");
+    setView(isRunning ? "live" : "file");
+  }, [slot, isRunning]);
+
+  const showingLive = isRunning && view === "live";
+  const viewerText = showingLive
+    ? text || "Waiting for log output..."
+    : archived || "Select a log file";
+
+  useEffect(() => {
+    if (!autoScroll || !logRef.current) return;
+    logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [viewerText, autoScroll]);
+
+  const loadArchived = useCallback(
+    async (name: string) => {
+      setSelected(name);
+      setView("file");
+      const data = await api.getHeadlessLog(serverId, slot, name, 0);
+      setArchived(data.content);
+    },
+    [serverId, slot],
+  );
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <Card className="lg:col-span-1">
+        <CardHeader>
+          <CardTitle className="text-base">HC logs</CardTitle>
+          <CardDescription>
+            RPT and session logs for {profileName}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="max-h-96 overflow-y-auto">
+          <ul className="text-sm">
+            {isRunning && (
+              <li>
+                <button
+                  type="button"
+                  className={`mb-1 w-full rounded px-2 py-1 text-left hover:bg-accent ${
+                    showingLive ? "bg-accent" : ""
+                  }`}
+                  onClick={() => setView("live")}
+                >
+                  <div className="font-medium">Live tail</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {activePath || "Streaming…"}
+                  </div>
+                </button>
+              </li>
+            )}
+            {(logs.data ?? []).map((l) => (
+              <li key={l.name}>
+                <button
+                  type="button"
+                  className={`mb-1 w-full rounded px-2 py-1 text-left hover:bg-accent ${
+                    !showingLive && selected === l.name ? "bg-accent" : ""
+                  }`}
+                  onClick={() => loadArchived(l.name)}
+                >
+                  <div className="truncate font-medium">{l.name}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {formatDate(l.modTime)} · {(l.size / 1024).toFixed(1)} KB
+                  </div>
+                </button>
+              </li>
+            ))}
+            {!logs.data?.length && (
+              <li className="text-muted-foreground">No logs yet.</li>
+            )}
+          </ul>
+        </CardContent>
+      </Card>
+
+      <Card className="lg:col-span-2">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <CardTitle className="text-base">
+              {showingLive ? "Live tail" : selected ? selected : "Log viewer"}
+            </CardTitle>
+            {showingLive && activePath && (
+              <CardDescription className="truncate text-xs">{activePath}</CardDescription>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(e) => setAutoScroll(e.target.checked)}
+            />
+            Auto-scroll
+          </label>
+        </CardHeader>
+        <CardContent>
+          <pre
+            ref={logRef}
+            className="h-[28rem] overflow-auto rounded-md bg-muted/40 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap"
+          >
+            {viewerText}
+          </pre>
         </CardContent>
       </Card>
     </div>

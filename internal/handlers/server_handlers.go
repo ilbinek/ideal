@@ -319,6 +319,7 @@ func DeleteServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "stop the server before deleting")
 		return
 	}
+	server.Default.StopAllHeadless(id)
 	instanceDir := server.InstanceDir(srv.Slug)
 	if err := database.DeleteServer(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete server")
