@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -204,6 +206,49 @@ func GetModsHandler(w http.ResponseWriter, r *http.Request) {
 		mods = []database.Mod{}
 	}
 	writeJSON(w, http.StatusOK, mods)
+}
+
+func GetModHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid mod id")
+		return
+	}
+
+	mod, err := database.GetMod(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "mod not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to fetch mod")
+		return
+	}
+
+	modsets, err := database.GetModsetsForMod(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch modsets")
+		return
+	}
+
+	servers, err := database.GetServersUsingMod(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch servers")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":              mod.ID,
+		"workshopId":      mod.WorkshopID,
+		"name":            mod.Name,
+		"downloaded":      mod.Downloaded,
+		"localPath":       mod.LocalPath,
+		"lastUpdated":     mod.LastUpdated,
+		"lastChecked":     mod.LastChecked,
+		"updateAvailable": mod.UpdateAvailable,
+		"modsets":         modsets,
+		"servers":         servers,
+	})
 }
 
 func AddModAPIHandler(w http.ResponseWriter, r *http.Request) {

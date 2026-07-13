@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
@@ -160,6 +160,21 @@ function StatusCell({ mod }: { mod: Mod }) {
   );
 }
 
+function ServerUsageWarning({ servers }: { servers: { name: string }[] }) {
+  if (servers.length === 0) return null;
+  const names = servers.map((s) => s.name);
+  return (
+    <>
+      {" "}
+      It is assigned to{" "}
+      <strong>
+        {names.length} server{names.length === 1 ? "" : "s"}
+      </strong>
+      : {names.join(", ")}. Those assignments will be removed.
+    </>
+  );
+}
+
 function RowActions({
   mod,
   modset,
@@ -172,6 +187,12 @@ function RowActions({
   const { itemFor } = useDownloads();
   const item = itemFor(mod.id);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const usage = useQuery({
+    queryKey: ["mods", mod.id],
+    queryFn: () => api.getMod(mod.id),
+    enabled: confirmOpen,
+  });
 
   const download = useMutation({
     mutationFn: () => api.downloadMod(mod.id),
@@ -204,6 +225,7 @@ function RowActions({
   const busy =
     download.isPending || item?.status === "queued" || item?.status === "downloading";
   const actionPending = removePermanent.isPending || unlink.isPending;
+  const servers = usage.data?.servers ?? [];
 
   let label = mod.downloaded ? "Redownload" : "Download";
   let Icon = mod.downloaded ? RotateCw : Download;
@@ -256,9 +278,25 @@ function RowActions({
           <DialogHeader>
             <DialogTitle>{modset ? "Remove mod?" : "Delete mod?"}</DialogTitle>
             <DialogDescription>
-              {modset
-                ? `Choose how to handle “${mod.name}” in this modset.`
-                : `This removes “${mod.name}” from the database and deletes its downloaded files.`}
+              {modset ? (
+                <>
+                  Choose how to handle “{mod.name}” in this modset.
+                  {usage.isFetching ? (
+                    <> Checking server usage…</>
+                  ) : (
+                    <ServerUsageWarning servers={servers} />
+                  )}
+                </>
+              ) : (
+                <>
+                  This removes “{mod.name}” from the database and deletes its downloaded files.
+                  {usage.isFetching ? (
+                    <> Checking server usage…</>
+                  ) : (
+                    <ServerUsageWarning servers={servers} />
+                  )}
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
@@ -429,6 +467,24 @@ export function Mods() {
   const { data: mods, isLoading } = useQuery({
     queryKey: ["mods", modset ?? null],
     queryFn: () => api.getMods(modset),
+  });
+
+  const selectedIds = useMemo(() => [...selected], [selected]);
+  const bulkUsage = useQuery({
+    queryKey: ["mods-usage", selectedIds],
+    queryFn: async () => {
+      const details = await Promise.all(selectedIds.map((id) => api.getMod(id)));
+      const serverNames = new Set<string>();
+      let modsInUse = 0;
+      for (const d of details) {
+        if (d.servers.length > 0) {
+          modsInUse++;
+          for (const s of d.servers) serverNames.add(s.name);
+        }
+      }
+      return { modsInUse, serverNames: [...serverNames] };
+    },
+    enabled: bulkDeleteOpen && selectedIds.length > 0,
   });
 
   const updateParams = (patch: Record<string, string | null>) => {
@@ -873,7 +929,14 @@ export function Mods() {
                           aria-label={`Select ${mod.name}`}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">{mod.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <Link
+                          to={`/mods/${mod.id}`}
+                          className="text-primary hover:underline"
+                        >
+                          {mod.name}
+                        </Link>
+                      </TableCell>
                       <TableCell>
                         <a
                           href={`https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.workshopId}`}
@@ -921,6 +984,20 @@ export function Mods() {
             <DialogDescription>
               This permanently removes the selected mods from the database and deletes their
               downloaded files. This cannot be undone.
+              {bulkUsage.isFetching ? (
+                <> Checking server usage…</>
+              ) : bulkUsage.data && bulkUsage.data.modsInUse > 0 ? (
+                <>
+                  {" "}
+                  <strong>
+                    {bulkUsage.data.modsInUse} of these mod
+                    {bulkUsage.data.modsInUse === 1 ? " is" : "s are"}
+                  </strong>{" "}
+                  assigned to server
+                  {bulkUsage.data.serverNames.length === 1 ? "" : "s"}:{" "}
+                  {bulkUsage.data.serverNames.join(", ")}. Those assignments will be removed.
+                </>
+              ) : null}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

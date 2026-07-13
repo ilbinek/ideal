@@ -419,3 +419,30 @@ func GetMod(id int) (*Mod, error) {
 
 	return &mod, nil
 }
+
+// GetModsetsForMod returns modsets that include the given mod.
+func GetModsetsForMod(modID int) ([]Modset, error) {
+	rows, err := db.Query(`
+		SELECT ms.id, ms.name, ms.created_at
+		FROM modsets ms
+		INNER JOIN modset_mods mm ON ms.id = mm.modset_id
+		WHERE mm.mod_id = ?
+		ORDER BY ms.name`, modID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var modsets []Modset
+	for rows.Next() {
+		var m Modset
+		if err := rows.Scan(&m.ID, &m.Name, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		modsets = append(modsets, m)
+	}
+	if modsets == nil {
+		modsets = []Modset{}
+	}
+	return modsets, rows.Err()
+}

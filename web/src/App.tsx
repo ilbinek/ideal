@@ -15,11 +15,13 @@ import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Modsets } from "@/pages/Modsets";
 import { Mods } from "@/pages/Mods";
+import { ModDetail } from "@/pages/ModDetail";
 import { SettingsPage } from "@/pages/Settings";
 import { Servers } from "@/pages/Servers";
 import { ServerCreate } from "@/pages/ServerCreate";
 import { ServerDetail } from "@/pages/ServerDetail";
 import { Branches } from "@/pages/Branches";
+import { StartupCommand } from "@/pages/StartupCommand";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -66,12 +68,13 @@ export default function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/modsets" element={<Modsets />} />
               <Route path="/mods" element={<Mods />} />
+              <Route path="/mods/:id" element={<ModDetail />} />
               <Route path="/servers" element={<Servers />} />
               <Route path="/servers/new" element={<ServerCreate />} />
               <Route path="/servers/:id" element={<ServerDetail />} />
               <Route path="/branches" element={<Branches />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/startup-command" element={<Navigate to="/servers" replace />} />
+              <Route path="/startup-command" element={<StartupCommand />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

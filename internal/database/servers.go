@@ -585,6 +585,41 @@ func GetServerIDsUsingMod(modID int) ([]int, error) {
 	return ids, rows.Err()
 }
 
+// ModServerRef is a lightweight server reference for mod usage panels.
+type ModServerRef struct {
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	Slug   string `json:"slug"`
+	Status string `json:"status"`
+}
+
+// GetServersUsingMod returns servers that have the given workshop mod assigned.
+func GetServersUsingMod(modID int) ([]ModServerRef, error) {
+	rows, err := db.Query(`
+		SELECT DISTINCT s.id, s.name, s.slug, s.status
+		FROM servers s
+		INNER JOIN server_mods sm ON sm.server_id = s.id
+		WHERE sm.mod_id = ?
+		ORDER BY s.name`, modID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var servers []ModServerRef
+	for rows.Next() {
+		var s ModServerRef
+		if err := rows.Scan(&s.ID, &s.Name, &s.Slug, &s.Status); err != nil {
+			return nil, err
+		}
+		servers = append(servers, s)
+	}
+	if servers == nil {
+		servers = []ModServerRef{}
+	}
+	return servers, rows.Err()
+}
+
 func GetServerKey(id int) (*ServerKey, error) {
 	var k ServerKey
 	err := db.QueryRow(

@@ -90,6 +90,18 @@ export interface BranchInstallSnapshot {
 
 export type ServerStatus = "stopped" | "starting" | "running" | "stopping" | "unknown";
 
+export interface ModServerRef {
+  id: number;
+  name: string;
+  slug: string;
+  status: ServerStatus;
+}
+
+export interface ModDetail extends Mod {
+  modsets: Modset[];
+  servers: ModServerRef[];
+}
+
 export interface GameServer {
   id: number;
   name: string;

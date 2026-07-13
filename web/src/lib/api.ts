@@ -8,6 +8,7 @@ import type {
   LogContent,
   LogEntry,
   Mod,
+  ModDetail,
   Modset,
   ProfileFileEntry,
   QueueSnapshot,
@@ -120,6 +121,7 @@ export const api = {
   // Mods
   getMods: (modset?: number) =>
     request<Mod[]>(`/api/mods${modset ? `?modset=${modset}` : ""}`),
+  getMod: (id: number) => request<ModDetail>(`/api/mods/${id}`),
   addMod: (workshopId: string, modsetId: number | null) =>
     request<{ workshopId: string; name: string }>("/api/mods", {
       method: "POST",
