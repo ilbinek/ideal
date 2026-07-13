@@ -60,40 +60,60 @@ export function ServerDetail() {
   const status = server.data?.status ?? live?.status ?? "stopped";
   const isRunning = status === "running" || status === "starting";
 
+  const [actionError, setActionError] = useState("");
+
   const start = useMutation({
     mutationFn: () => api.startServer(serverId),
-    onMutate: () => patchServerStatus(queryClient, serverId, "starting"),
+    onMutate: () => {
+      setActionError("");
+      patchServerStatus(queryClient, serverId, "starting");
+    },
     onSuccess: () => {
+      setActionError("");
       patchServerStatus(queryClient, serverId, "running");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
-    onError: () => {
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Start failed");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
   });
   const stop = useMutation({
     mutationFn: () => api.stopServer(serverId),
-    onMutate: () => patchServerStatus(queryClient, serverId, "stopping"),
+    onMutate: () => {
+      setActionError("");
+      patchServerStatus(queryClient, serverId, "stopping");
+    },
     onSuccess: () => {
+      setActionError("");
       patchServerStatus(queryClient, serverId, "stopped");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
-    onError: () => {
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Stop failed");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
   });
   const restart = useMutation({
     mutationFn: () => api.restartServer(serverId),
-    onMutate: () => patchServerStatus(queryClient, serverId, "starting"),
+    onMutate: () => {
+      setActionError("");
+      patchServerStatus(queryClient, serverId, "stopping");
+    },
     onSuccess: () => {
+      setActionError("");
       patchServerStatus(queryClient, serverId, "running");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
-    onError: () => {
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Restart failed");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
   });
   const del = useMutation({
@@ -144,7 +164,7 @@ export function ServerDetail() {
         <div className="flex gap-2">
           <Button
             size="sm"
-            disabled={start.isPending || stop.isPending}
+            disabled={start.isPending || stop.isPending || restart.isPending}
             onClick={() => (isRunning ? stop.mutate() : start.mutate())}
           >
             {isRunning ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
@@ -153,7 +173,7 @@ export function ServerDetail() {
           <Button
             size="sm"
             variant="outline"
-            disabled={restart.isPending}
+            disabled={restart.isPending || start.isPending || stop.isPending}
             onClick={() => restart.mutate()}
           >
             <RotateCcw className="size-3.5" /> Restart
@@ -170,6 +190,12 @@ export function ServerDetail() {
           </Button>
         </div>
       </div>
+
+      {actionError && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-1 border-b border-border pb-1">
         {tabs.map((t) => (

@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -102,6 +103,7 @@ func ListLocalModFolders(root string) ([]LocalModFolder, error) {
 }
 
 // SyncModMirror creates a lowercased file-symlink mirror of src under destDir.
+// Stale files left from previous syncs (e.g. renamed .bikey keys) are removed.
 func SyncModMirror(src, destDir string) error {
 	if src == "" {
 		return fmt.Errorf("mod path is empty")
@@ -110,6 +112,7 @@ func SyncModMirror(src, destDir string) error {
 		return err
 	}
 
+	wanted := make(map[string]struct{})
 	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -121,7 +124,9 @@ func SyncModMirror(src, destDir string) error {
 		if relPath == "." {
 			return nil
 		}
-		targetPath := filepath.Join(destDir, strings.ToLower(relPath))
+		relLower := strings.ToLower(relPath)
+		wanted[filepath.Clean(relLower)] = struct{}{}
+		targetPath := filepath.Join(destDir, relLower)
 		if info.IsDir() {
 			return os.MkdirAll(targetPath, 0755)
 		}
@@ -144,5 +149,39 @@ func SyncModMirror(src, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to sync mod mirror %s -> %s: %w", src, destDir, err)
 	}
+
+	// Drop mirror entries that no longer exist in the source (common after mod updates).
+	_ = filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || path == destDir {
+			return nil
+		}
+		rel, err := filepath.Rel(destDir, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.Clean(rel)
+		if _, ok := wanted[rel]; ok {
+			return nil
+		}
+		if info.IsDir() {
+			// Remove empty dirs later only if nothing wanted under them.
+			hasWantedChild := false
+			for w := range wanted {
+				if strings.HasPrefix(w, rel+string(os.PathSeparator)) || strings.HasPrefix(w, rel+"/") {
+					hasWantedChild = true
+					break
+				}
+			}
+			if !hasWantedChild {
+				_ = os.RemoveAll(path)
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		log.Printf("[LOCALMODS] removing stale mirror file %s", path)
+		_ = os.Remove(path)
+		return nil
+	})
+
 	return nil
 }

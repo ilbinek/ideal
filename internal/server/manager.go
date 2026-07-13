@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"arma3modmanager/internal/database"
@@ -39,6 +40,7 @@ type Manager struct {
 
 type runningInstance struct {
 	serverID       int
+	gen            uint64
 	pid            int
 	proc           *managedProc
 	startedAt      time.Time
@@ -52,6 +54,8 @@ var Default = &Manager{
 	instances: make(map[int]*runningInstance),
 	subs:      make(map[chan AllStatusSnapshot]struct{}),
 }
+
+var nextInstanceGen uint64
 
 // Init reconciles DB state on startup.
 func Init() {
@@ -200,11 +204,8 @@ func (m *Manager) Start(serverID int) error {
 			return fmt.Errorf("port conflict with server %q", c.Name)
 		}
 	}
-	if !IsPortAvailable(srv.GamePort) {
-		return fmt.Errorf("game port %d is not available", srv.GamePort)
-	}
-	if !IsPortAvailable(srv.SteamPort) {
-		return fmt.Errorf("steam port %d is not available", srv.SteamPort)
+	if err := waitForPortsFree(srv.GamePort, srv.SteamPort, 30*time.Second); err != nil {
+		return err
 	}
 
 	if err := ProvisionServer(serverID); err != nil {
@@ -217,15 +218,20 @@ func (m *Manager) Start(serverID int) error {
 	}
 
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStarting, 0, "")
+	m.broadcast()
 
 	startTime := time.Now()
 	if err := os.MkdirAll(filepath.Join(InstanceDir(srv.Slug), "logs"), 0755); err != nil {
+		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
+		m.broadcast()
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 	sessionLogPath := filepath.Join(InstanceDir(srv.Slug), "logs",
 		fmt.Sprintf("session-%s.log", startTime.Format("2006-01-02_150405")))
 	sessionFile, err := os.OpenFile(sessionLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
+		m.broadcast()
 		return fmt.Errorf("failed to create session log: %w", err)
 	}
 	sessionLog := newSessionLogWriter(sessionFile, 512*1024)
@@ -234,17 +240,28 @@ func (m *Manager) Start(serverID int) error {
 	if err != nil {
 		_ = sessionLog.Close()
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
+		m.broadcast()
 		return err
 	}
 
-	rptPath, _ := WaitForRPT(srv.Slug, startTime.Add(-time.Second), 30*time.Second)
-	if rptPath == "" {
-		rptPath = ResolveRPTPath(srv.Slug, "")
+	// Confirm the process did not die immediately (e.g. port still held on UDP).
+	if err := verifyProcessStartup(proc, srv.GamePort, 8*time.Second); err != nil {
+		_ = stopProcess(proc.pid)
+		_ = proc.wait(5 * time.Second)
+		_ = sessionLog.Close()
+		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
+		m.broadcast()
+		log.Printf("[SERVER] start failed for %d: %v", serverID, err)
+		return err
 	}
+
+	gen := atomic.AddUint64(&nextInstanceGen, 1)
+	rptPath := ResolveRPTPath(srv.Slug, "")
 
 	m.mu.Lock()
 	m.instances[serverID] = &runningInstance{
 		serverID:       serverID,
+		gen:            gen,
 		pid:            proc.pid,
 		proc:           proc,
 		startedAt:      startTime,
@@ -257,8 +274,78 @@ func (m *Manager) Start(serverID int) error {
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, proc.pid, rptPath)
 	m.broadcast()
 
-	go m.watchServer(serverID, startTime, proc.pid)
+	go m.watchServer(serverID, gen)
+	go m.resolveRPT(serverID, gen, startTime)
 	return nil
+}
+
+func waitForPortsFree(gamePort, steamPort int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		gameFree := IsPortAvailable(gamePort)
+		steamFree := IsPortAvailable(steamPort)
+		if gameFree && steamFree {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if !gameFree {
+				return fmt.Errorf("game port %d is not available", gamePort)
+			}
+			return fmt.Errorf("steam port %d is not available", steamPort)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// verifyProcessStartup ensures the child did not exit right away. Prefer seeing
+// the game port bind; if Arma is still starting after timeout, allow it.
+func verifyProcessStartup(proc *managedProc, gamePort int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	sawAlive := false
+	for time.Now().Before(deadline) {
+		if !proc.exited() {
+			sawAlive = true
+			if IsPortInUse(gamePort) {
+				return nil
+			}
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		// Process exited. If something else (or a child) holds the port, treat as OK.
+		if IsPortInUse(gamePort) {
+			return nil
+		}
+		if sawAlive {
+			return fmt.Errorf("server process exited immediately after start (check session log / ports)")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if proc.exited() && !IsPortInUse(gamePort) {
+		return fmt.Errorf("server process exited immediately after start (check session log / ports)")
+	}
+	return nil
+}
+
+func (m *Manager) resolveRPT(serverID int, gen uint64, startTime time.Time) {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return
+	}
+	rptPath, _ := WaitForRPT(srv.Slug, startTime.Add(-time.Second), 30*time.Second)
+	if rptPath == "" {
+		return
+	}
+	m.mu.Lock()
+	inst, ok := m.instances[serverID]
+	if !ok || inst.gen != gen {
+		m.mu.Unlock()
+		return
+	}
+	inst.rptPath = rptPath
+	pid := inst.pid
+	m.mu.Unlock()
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, pid, rptPath)
+	m.broadcast()
 }
 
 // Stop stops a running server.
@@ -275,9 +362,10 @@ func (m *Manager) Stop(serverID int) error {
 	m.broadcast()
 
 	srv, _ := database.GetServer(serverID)
-	gamePort := 0
+	gamePort, steamPort := 0, 0
 	if srv != nil {
 		gamePort = srv.GamePort
+		steamPort = srv.SteamPort
 	}
 
 	if err := stopProcess(inst.pid); err != nil {
@@ -294,9 +382,17 @@ func (m *Manager) Stop(serverID int) error {
 	_ = inst.proc.wait(30 * time.Second)
 
 	m.mu.Lock()
-	m.closeInstanceLog(inst)
-	delete(m.instances, serverID)
+	// Only clear if this is still the instance we stopped (Restart race safety).
+	if cur, ok := m.instances[serverID]; ok && cur.gen == inst.gen {
+		m.closeInstanceLog(cur)
+		delete(m.instances, serverID)
+	}
 	m.mu.Unlock()
+
+	if gamePort > 0 {
+		_ = waitForPortsFree(gamePort, steamPort, 30*time.Second)
+	}
+
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, inst.rptPath)
 	m.broadcast()
 	return nil
@@ -313,6 +409,7 @@ func (m *Manager) stopOrphan(serverID int) error {
 			return err
 		}
 	}
+	_ = waitForPortsFree(srv.GamePort, srv.SteamPort, 15*time.Second)
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, srv.ActiveRPT)
 	m.broadcast()
 	return nil
@@ -330,26 +427,6 @@ func (m *Manager) closeInstanceLog(inst *runningInstance) {
 func (m *Manager) Restart(serverID int) error {
 	if err := m.Stop(serverID); err != nil {
 		return err
-	}
-	srv, err := database.GetServer(serverID)
-	if err != nil {
-		return err
-	}
-	// Wait for ports to free; a fixed sleep is often too short after Arma exits.
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		gameFree := IsPortAvailable(srv.GamePort)
-		steamFree := IsPortAvailable(srv.SteamPort)
-		if gameFree && steamFree {
-			break
-		}
-		if time.Now().After(deadline) {
-			if !gameFree {
-				return fmt.Errorf("game port %d still in use after stop", srv.GamePort)
-			}
-			return fmt.Errorf("steam port %d still in use after stop", srv.SteamPort)
-		}
-		time.Sleep(500 * time.Millisecond)
 	}
 	return m.Start(serverID)
 }
@@ -389,7 +466,7 @@ func (m *Manager) ActiveSessionLogPath(serverID int) string {
 	return ""
 }
 
-func (m *Manager) watchServer(serverID int, startedAt time.Time, pid int) {
+func (m *Manager) watchServer(serverID int, gen uint64) {
 	const pollInterval = 2 * time.Second
 	const deadThreshold = 2
 
@@ -399,7 +476,13 @@ func (m *Manager) watchServer(serverID int, startedAt time.Time, pid int) {
 
 		m.mu.Lock()
 		inst, tracked := m.instances[serverID]
-		sameGen := tracked && inst.startedAt.Equal(startedAt) && inst.pid == pid
+		sameGen := tracked && inst.gen == gen
+		var proc *managedProc
+		var pid int
+		if sameGen {
+			proc = inst.proc
+			pid = inst.pid
+		}
 		m.mu.Unlock()
 		if !tracked || !sameGen {
 			// Stop/Restart already replaced or removed this instance.
@@ -413,7 +496,7 @@ func (m *Manager) watchServer(serverID int, startedAt time.Time, pid int) {
 
 		// Prefer the Wait() result: once reaped, the PID is gone. Port fallback
 		// still covers Arma leaving a child bound after the launcher exits.
-		if inst.proc != nil && inst.proc.exited() {
+		if proc != nil && proc.exited() {
 			if IsPortInUse(srv.GamePort) {
 				consecutiveDead = 0
 				continue
@@ -432,7 +515,7 @@ func (m *Manager) watchServer(serverID int, startedAt time.Time, pid int) {
 
 	m.mu.Lock()
 	inst, ok := m.instances[serverID]
-	if !ok || !inst.startedAt.Equal(startedAt) || inst.pid != pid {
+	if !ok || inst.gen != gen {
 		m.mu.Unlock()
 		return
 	}

@@ -3,9 +3,11 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -34,11 +36,17 @@ func startProcess(binary string, args []string, workDir string, capture io.Write
 }
 
 func stopProcess(pid int) error {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
+	if pid <= 0 {
+		return nil
 	}
-	_ = proc.Kill()
+	// Kill the whole tree — Arma can leave children holding game ports.
+	_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
+
+	proc, err := os.FindProcess(pid)
+	if err == nil {
+		_ = proc.Kill()
+	}
+
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if !processRunning(pid) {
@@ -46,13 +54,19 @@ func stopProcess(pid int) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	_ = proc.Kill()
+	_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
+	if proc != nil {
+		_ = proc.Kill()
+	}
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if !processRunning(pid) {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	if processRunning(pid) {
+		return fmt.Errorf("process %d did not exit after kill", pid)
 	}
 	return nil
 }

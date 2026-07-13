@@ -184,12 +184,10 @@ func provisionKeys(instanceDir string, serverID int) error {
 				}
 			}
 		} else if sm.CustomPath != "" {
-			mirror := utils.LocalModsMirrorPath(srv.Slug, sm.CustomPath)
-			if _, err := os.Stat(mirror); err == nil {
-				modPaths = append(modPaths, mirror)
-			} else {
-				modPaths = append(modPaths, sm.CustomPath)
-			}
+			// Keys come from the real mod folder. The lowercase localmods mirror
+			// can retain dangling symlinks after a mod update; those must not
+			// block provision/start.
+			modPaths = append(modPaths, sm.CustomPath)
 		}
 	}
 

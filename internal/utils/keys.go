@@ -2,22 +2,35 @@ package utils
 
 import (
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// FindBikeyFiles recursively finds all .bikey files in a directory
+// FindBikeyFiles recursively finds all readable .bikey files in a directory.
+// Broken symlinks (common in stale lowercase mirrors) are skipped.
 func FindBikeyFiles(dir string) ([]string, error) {
 	var bikeyFiles []string
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			// Skip unreadable entries instead of failing the whole scan.
+			log.Printf("[KEYS] skip %s: %v", path, err)
+			return nil
 		}
-		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".bikey") {
-			bikeyFiles = append(bikeyFiles, path)
+		if info.IsDir() {
+			return nil
 		}
+		if !strings.HasSuffix(strings.ToLower(info.Name()), ".bikey") {
+			return nil
+		}
+		// Lstat succeeds for dangling symlinks; Stat/Open would fail.
+		if _, err := os.Stat(path); err != nil {
+			log.Printf("[KEYS] skip unreadable key %s: %v", path, err)
+			return nil
+		}
+		bikeyFiles = append(bikeyFiles, path)
 		return nil
 	})
 
@@ -67,16 +80,23 @@ func CopyBikeysFromDir(srcDir, destDir string) error {
 		if !strings.HasSuffix(strings.ToLower(name), ".bikey") {
 			continue
 		}
-		if err := CopyFile(filepath.Join(srcDir, name), filepath.Join(destDir, name)); err != nil {
-			return err
+		src := filepath.Join(srcDir, name)
+		if _, err := os.Stat(src); err != nil {
+			log.Printf("[KEYS] skip unreadable key %s: %v", src, err)
+			continue
+		}
+		if err := CopyFile(src, filepath.Join(destDir, name)); err != nil {
+			log.Printf("[KEYS] failed to copy %s: %v", src, err)
+			continue
 		}
 	}
 	return nil
 }
 
-// ExtractKeys copies all .bikey files from mod directories to a keys directory
+// ExtractKeys copies all .bikey files from mod directories to a keys directory.
+// Individual missing/unreadable keys are skipped so a stale mirror cannot
+// block server start.
 func ExtractKeys(modPaths []string, keysDir string) error {
-	// Create keys directory
 	if err := os.MkdirAll(keysDir, 0755); err != nil {
 		return err
 	}
@@ -84,15 +104,16 @@ func ExtractKeys(modPaths []string, keysDir string) error {
 	for _, modPath := range modPaths {
 		bikeyFiles, err := FindBikeyFiles(modPath)
 		if err != nil {
-			return err
+			log.Printf("[KEYS] scan failed for %s: %v", modPath, err)
+			continue
 		}
 
 		for _, bikeyFile := range bikeyFiles {
 			filename := filepath.Base(bikeyFile)
 			destPath := filepath.Join(keysDir, filename)
-
 			if err := CopyFile(bikeyFile, destPath); err != nil {
-				return err
+				log.Printf("[KEYS] failed to copy %s: %v", bikeyFile, err)
+				continue
 			}
 		}
 	}

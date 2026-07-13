@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -38,31 +39,44 @@ export function Servers() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { statusFor } = useServers();
+  const [actionError, setActionError] = useState("");
 
   const servers = useQuery({ queryKey: ["servers"], queryFn: () => api.getServers() });
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
 
   const start = useMutation({
     mutationFn: (id: number) => api.startServer(id),
-    onMutate: (id) => patchServerStatus(queryClient, id, "starting"),
+    onMutate: (id) => {
+      setActionError("");
+      patchServerStatus(queryClient, id, "starting");
+    },
     onSuccess: (_data, id) => {
+      setActionError("");
       patchServerStatus(queryClient, id, "running");
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       queryClient.invalidateQueries({ queryKey: ["servers", id] });
     },
-    onError: (_err, id) => {
+    onError: (err, id) => {
+      setActionError(err instanceof Error ? err.message : "Start failed");
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       queryClient.invalidateQueries({ queryKey: ["servers", id] });
     },
   });
   const stop = useMutation({
     mutationFn: (id: number) => api.stopServer(id),
-    onMutate: (id) => patchServerStatus(queryClient, id, "stopping"),
+    onMutate: (id) => {
+      setActionError("");
+      patchServerStatus(queryClient, id, "stopping");
+    },
     onSuccess: (_data, id) => {
+      setActionError("");
       patchServerStatus(queryClient, id, "stopped");
       queryClient.invalidateQueries({ queryKey: ["servers"] });
       queryClient.invalidateQueries({ queryKey: ["servers", id] });
     },
-    onError: (_err, id) => {
+    onError: (err, id) => {
+      setActionError(err instanceof Error ? err.message : "Stop failed");
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       queryClient.invalidateQueries({ queryKey: ["servers", id] });
     },
   });
@@ -91,6 +105,12 @@ export function Servers() {
           </Button>
         </div>
       </div>
+
+      {actionError && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       {servers.isLoading ? (
         <div className="flex justify-center py-12">

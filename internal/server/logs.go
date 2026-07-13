@@ -334,6 +334,10 @@ func WaitForRPT(slug string, after time.Time, timeout time.Duration) (string, er
 
 // IsPortAvailable checks if a TCP port can be bound.
 func IsPortAvailable(port int) bool {
+	return isTCPPortAvailable(port) && isUDPPortAvailable(port)
+}
+
+func isTCPPortAvailable(port int) bool {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return false
@@ -342,7 +346,21 @@ func IsPortAvailable(port int) bool {
 	return true
 }
 
-// IsPortInUse reports whether something is already listening on a TCP port.
+func isUDPPortAvailable(port int) bool {
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	c, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+// IsPortInUse reports whether something is already listening on the game port
+// (TCP or UDP — Arma binds UDP for gameplay).
 func IsPortInUse(port int) bool {
 	return !IsPortAvailable(port)
 }
