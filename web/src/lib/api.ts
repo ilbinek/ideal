@@ -323,6 +323,39 @@ export const api = {
         offset != null ? `?offset=${offset}` : ""
       }`,
     ),
+  deleteHeadlessLog: (id: number, slot: number, filename: string) =>
+    request<{ ok: boolean }>(
+      `/api/servers/${id}/headless/${slot}/logs/${encodeURIComponent(filename)}`,
+      { method: "DELETE" },
+    ),
+  downloadHeadlessLog: async (id: number, slot: number, filename: string) => {
+    const res = await fetch(
+      `/api/servers/${id}/headless/${slot}/logs/${encodeURIComponent(filename)}/download`,
+    );
+    if (res.status === 401) {
+      unauthorizedHandler?.();
+      throw new ApiError(401, "unauthorized");
+    }
+    if (!res.ok) {
+      let message = res.statusText;
+      try {
+        const body = await res.json();
+        if (body?.error) message = body.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, message);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 
   // Missions
   listMissions: (id: number) => request<LogEntry[]>(`/api/servers/${id}/missions`),

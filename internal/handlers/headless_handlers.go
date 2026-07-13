@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"arma3modmanager/internal/database"
@@ -187,6 +188,70 @@ func GetHeadlessLogHandler(w http.ResponseWriter, r *http.Request) {
 		"totalSize": totalSize,
 		"offset":    offset,
 	})
+}
+
+func DownloadHeadlessLogHandler(w http.ResponseWriter, r *http.Request) {
+	id, slot, ok := parseServerSlot(w, r)
+	if !ok {
+		return
+	}
+	filename := r.PathValue("filename")
+	srv, err := database.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	hc, err := database.GetHeadlessClient(id, slot)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "headless client not found")
+		return
+	}
+	f, name, err := server.OpenHeadlessLogForDownload(srv.Slug, slot, hc.ProfileName, filename)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+func DeleteHeadlessLogHandler(w http.ResponseWriter, r *http.Request) {
+	id, slot, ok := parseServerSlot(w, r)
+	if !ok {
+		return
+	}
+	filename := r.PathValue("filename")
+	srv, err := database.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	hc, err := database.GetHeadlessClient(id, slot)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "headless client not found")
+		return
+	}
+	if err := server.DeleteHeadlessLog(id, slot, srv.Slug, hc.ProfileName, filename); err != nil {
+		msg := err.Error()
+		status := http.StatusInternalServerError
+		if strings.Contains(msg, "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(msg, "cannot delete") || strings.Contains(msg, "invalid") {
+			status = http.StatusConflict
+		}
+		writeError(w, status, msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func HeadlessLogStreamHandler(w http.ResponseWriter, r *http.Request) {

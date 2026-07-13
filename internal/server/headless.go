@@ -415,6 +415,23 @@ func (m *Manager) ActiveHeadlessSessionLogPath(serverID, slot int) string {
 	return ""
 }
 
+// ActiveHeadlessLogBasenames returns session/RPT filenames for a tracked HC process.
+func (m *Manager) ActiveHeadlessLogBasenames(serverID, slot int) (session, rpt string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.headless[hcKey{serverID, slot}]
+	if !ok {
+		return "", ""
+	}
+	if inst.sessionLogPath != "" {
+		session = filepath.Base(inst.sessionLogPath)
+	}
+	if inst.rptPath != "" {
+		rpt = filepath.Base(inst.rptPath)
+	}
+	return session, rpt
+}
+
 // IsHeadlessRunning reports whether Ideal is tracking a live HC process.
 func (m *Manager) IsHeadlessRunning(serverID, slot int) bool {
 	m.mu.Lock()
@@ -580,6 +597,65 @@ func ListHeadlessLogs(slug string, slot int, profileName string) ([]LogEntry, er
 		}
 	}
 	return out, nil
+}
+
+// DeleteHeadlessLog removes a log that belongs to the given HC slot.
+func DeleteHeadlessLog(serverID, slot int, slug, profileName, filename string) error {
+	if err := validateLogFilename(filename); err != nil {
+		return err
+	}
+	sessionName, rptName := Default.ActiveHeadlessLogBasenames(serverID, slot)
+	if sessionName != "" && sessionName == filename {
+		return fmt.Errorf("cannot delete the active session log while the headless client is running")
+	}
+	if rptName != "" && rptName == filename {
+		return fmt.Errorf("cannot delete the active RPT while the headless client is running")
+	}
+
+	logs, err := ListHeadlessLogs(slug, slot, profileName)
+	if err != nil {
+		return err
+	}
+	var path string
+	for _, e := range logs {
+		if e.Name == filename {
+			path = e.Path
+			break
+		}
+	}
+	if path == "" {
+		return fmt.Errorf("log file not found")
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("failed to delete log: %w", err)
+	}
+	return nil
+}
+
+// OpenHeadlessLogForDownload opens an HC-owned log for download.
+func OpenHeadlessLogForDownload(slug string, slot int, profileName, filename string) (*os.File, string, error) {
+	if err := validateLogFilename(filename); err != nil {
+		return nil, "", err
+	}
+	logs, err := ListHeadlessLogs(slug, slot, profileName)
+	if err != nil {
+		return nil, "", err
+	}
+	var path string
+	for _, e := range logs {
+		if e.Name == filename {
+			path = e.Path
+			break
+		}
+	}
+	if path == "" {
+		return nil, "", fmt.Errorf("log file not found")
+	}
+	f, err := openLogFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, filepath.Base(path), nil
 }
 
 // ResolveHeadlessRPTPath returns the best RPT for an HC profile.

@@ -108,7 +108,9 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/restart", apiAuth(RestartHeadlessHandler))
 	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs", apiAuth(ListHeadlessLogsHandler))
 	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/stream", apiAuth(HeadlessLogStreamHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/{filename}/download", apiAuth(DownloadHeadlessLogHandler))
 	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/{filename}", apiAuth(GetHeadlessLogHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/headless/{slot}/logs/{filename}", apiAuth(DeleteHeadlessLogHandler))
 
 	// Missions
 	mux.HandleFunc("GET /api/servers/{id}/missions", apiAuth(ListMissionsHandler))
