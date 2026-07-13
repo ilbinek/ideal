@@ -189,7 +189,7 @@ export function ServerDetail() {
       </div>
 
       {tab === "overview" && <OverviewTab serverId={serverId} srv={srv} />}
-      {tab === "mods" && <ModsTab serverId={serverId} />}
+      {tab === "mods" && <ModsTab serverId={serverId} srv={srv} />}
       {tab === "keys" && <KeysTab serverId={serverId} />}
       {tab === "config" && <ConfigTab serverId={serverId} serverStatus={status} />}
       {tab === "logs" && <LogsTab serverId={serverId} isRunning={isRunning} />}
@@ -230,7 +230,6 @@ function OverviewTab({
   const [steamPort, setSteamPort] = useState(String(srv.steamPort));
   const [profileName, setProfileName] = useState(srv.profileName);
   const [serverBinary, setServerBinary] = useState(srv.serverBinary ?? "");
-  const [localModsRoot, setLocalModsRoot] = useState(srv.localModsRoot ?? "");
   const [extra, setExtra] = useState(srv.extraLaunchParams);
 
   const branchIdNum = parseInt(branchId, 10);
@@ -248,10 +247,6 @@ function OverviewTab({
     setServerBinary(srv.serverBinary ?? "");
   }, [srv.serverBinary]);
 
-  useEffect(() => {
-    setLocalModsRoot(srv.localModsRoot ?? "");
-  }, [srv.localModsRoot]);
-
   const save = useMutation({
     mutationFn: () =>
       api.updateServer(serverId, {
@@ -262,7 +257,7 @@ function OverviewTab({
         steamPort: parseInt(steamPort, 10),
         profileName,
         serverBinary,
-        localModsRoot,
+        localModsRoot: srv.localModsRoot ?? "",
         extraLaunchParams: extra,
       }),
     onSuccess: () => {
@@ -276,15 +271,6 @@ function OverviewTab({
   const provision = useMutation({
     mutationFn: () => api.provisionServer(serverId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
-      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
-    },
-  });
-
-  const syncLocal = useMutation({
-    mutationFn: () => api.syncLocalMods(serverId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
       queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
       queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
     },
@@ -342,18 +328,6 @@ function OverviewTab({
             </p>
           </div>
           <div className="flex flex-col gap-1">
-            <Label>Local mods root</Label>
-            <Input
-              value={localModsRoot}
-              onChange={(e) => setLocalModsRoot(e.target.value)}
-              placeholder="/path/to/addons-root"
-            />
-            <p className="text-xs text-muted-foreground">
-              Folder whose subfolders are Arma mods (each with an addons/ dir). They are
-              auto-assigned and mirrored under this server&apos;s localmods/.
-            </p>
-          </div>
-          <div className="flex flex-col gap-1">
             <Label>Modset</Label>
             <select
               className="rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -401,19 +375,6 @@ function OverviewTab({
             >
               <RefreshCw className="size-3.5" /> Re-provision
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => syncLocal.mutate()}
-              disabled={syncLocal.isPending || !localModsRoot.trim()}
-            >
-              {syncLocal.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="size-3.5" />
-              )}
-              Rescan local mods
-            </Button>
           </div>
         </CardContent>
       </Card>
@@ -443,7 +404,23 @@ function OverviewTab({
   );
 }
 
-function ModsTab({ serverId }: { serverId: number }) {
+function ModsTab({
+  serverId,
+  srv,
+}: {
+  serverId: number;
+  srv: {
+    name: string;
+    branchId: number;
+    modsetId?: number;
+    gamePort: number;
+    steamPort: number;
+    profileName: string;
+    serverBinary: string;
+    localModsRoot: string;
+    extraLaunchParams: string;
+  };
+}) {
   const queryClient = useQueryClient();
   const serverMods = useQuery({
     queryKey: ["serverMods", serverId],
@@ -453,14 +430,50 @@ function ModsTab({ serverId }: { serverId: number }) {
 
   const [mods, setMods] = useState<ServerMod[]>([]);
   const [customPath, setCustomPath] = useState("");
+  const [localModsRoot, setLocalModsRoot] = useState(srv.localModsRoot ?? "");
 
   useEffect(() => {
     if (serverMods.data) setMods(serverMods.data);
   }, [serverMods.data]);
 
+  useEffect(() => {
+    setLocalModsRoot(srv.localModsRoot ?? "");
+  }, [srv.localModsRoot]);
+
   const save = useMutation({
     mutationFn: () => api.putServerMods(serverId, mods),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+    },
+  });
+
+  const applyLocalRoot = useMutation({
+    mutationFn: async () => {
+      const nextRoot = localModsRoot.trim();
+      const prevRoot = (srv.localModsRoot ?? "").trim();
+      if (nextRoot !== prevRoot) {
+        // Backend syncs + provisions when the root path changes.
+        await api.updateServer(serverId, {
+          name: srv.name,
+          branchId: srv.branchId,
+          modsetId: srv.modsetId ?? null,
+          gamePort: srv.gamePort,
+          steamPort: srv.steamPort,
+          profileName: srv.profileName,
+          serverBinary: srv.serverBinary ?? "",
+          localModsRoot: nextRoot,
+          extraLaunchParams: srv.extraLaunchParams ?? "",
+        });
+        return;
+      }
+      if (nextRoot) {
+        await api.syncLocalMods(serverId);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
       queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
       queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
       queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
@@ -497,14 +510,46 @@ function ModsTab({ serverId }: { serverId: number }) {
     return m.customPath ?? "Custom";
   };
 
+  const rootDirty = localModsRoot.trim() !== (srv.localModsRoot ?? "").trim();
+
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
+          <CardTitle className="text-base">Local mods folder</CardTitle>
+          <CardDescription>
+            Point at a folder of Arma mods (each subfolder with addons/ or mod.cpp). Ideal
+            discovers them, mirrors them under this server, and lists them below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex flex-1 flex-col gap-1">
+            <Label>Root path</Label>
+            <Input
+              value={localModsRoot}
+              onChange={(e) => setLocalModsRoot(e.target.value)}
+              placeholder="/path/to/mods-root"
+            />
+          </div>
+          <Button
+            onClick={() => applyLocalRoot.mutate()}
+            disabled={applyLocalRoot.isPending || (!rootDirty && !localModsRoot.trim())}
+          >
+            {applyLocalRoot.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+            {rootDirty ? "Save & scan" : "Rescan"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle className="text-base">Add mods</CardTitle>
           <CardDescription>
-            Workshop and one-off custom paths. Mods from the local mods root are managed on
-            the Overview tab and listed below.
+            Workshop downloads and one-off custom paths outside the local folder above.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
