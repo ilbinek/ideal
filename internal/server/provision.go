@@ -194,3 +194,31 @@ func provisionKeys(instanceDir string, serverID int) error {
 	}
 	return nil
 }
+
+// RescanKeys rebuilds servers/<slug>/keys from branch keys, assigned mods, and
+// custom uploads without re-linking the rest of the instance.
+func RescanKeys(serverID int) error {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return err
+	}
+	instanceDir := InstanceDir(srv.Slug)
+	if err := os.MkdirAll(filepath.Join(instanceDir, "keys"), 0755); err != nil {
+		return err
+	}
+	return provisionKeys(instanceDir, serverID)
+}
+
+// RescanKeysForMod refreshes keys on every server that has this mod assigned.
+func RescanKeysForMod(modID int) {
+	ids, err := database.GetServerIDsUsingMod(modID)
+	if err != nil {
+		log.Printf("[PROVISION] failed to find servers using mod %d: %v", modID, err)
+		return
+	}
+	for _, id := range ids {
+		if err := RescanKeys(id); err != nil {
+			log.Printf("[PROVISION] key rescan failed for server %d after mod %d update: %v", id, modID, err)
+		}
+	}
+}

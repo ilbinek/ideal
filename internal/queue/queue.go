@@ -12,6 +12,7 @@ import (
 
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
+	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/steam"
 	"arma3modmanager/internal/utils"
 )
@@ -252,6 +253,7 @@ func (m *Manager) finishGoSteamItem(it *Item) {
 	if err := utils.SyncModToAddons(modPath); err != nil {
 		log.Printf("[QUEUE] failed to sync mod to addons: %v", err)
 	}
+	server.RescanKeysForMod(it.ID)
 
 	m.mu.Lock()
 	it.Status = StatusDone
@@ -311,6 +313,7 @@ func (m *Manager) download(item *Item) {
 	if err := utils.SyncModToAddons(modPath); err != nil {
 		log.Printf("[QUEUE] failed to sync mod to addons: %v", err)
 	}
+	server.RescanKeysForMod(item.ID)
 
 	m.mu.Lock()
 	item.Status = StatusDone

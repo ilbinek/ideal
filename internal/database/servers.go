@@ -500,6 +500,27 @@ func DeleteServerKey(id int) error {
 	return err
 }
 
+// GetServerIDsUsingMod returns distinct server IDs that have the given mod assigned.
+func GetServerIDsUsingMod(modID int) ([]int, error) {
+	rows, err := db.Query(
+		`SELECT DISTINCT server_id FROM server_mods WHERE mod_id = ? ORDER BY server_id`,
+		modID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func GetServerKey(id int) (*ServerKey, error) {
 	var k ServerKey
 	err := db.QueryRow(

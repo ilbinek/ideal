@@ -81,6 +81,7 @@ func APIHandler() http.Handler {
 
 	// Server keys
 	mux.HandleFunc("GET /api/servers/{id}/keys", apiAuth(GetServerKeysHandler))
+	mux.HandleFunc("POST /api/servers/{id}/keys/rescan", apiAuth(RescanServerKeysHandler))
 	mux.HandleFunc("POST /api/servers/{id}/keys", apiAuth(UploadServerKeyHandler))
 	mux.HandleFunc("DELETE /api/servers/{id}/keys/{keyId}", apiAuth(DeleteServerKeyHandler))
 

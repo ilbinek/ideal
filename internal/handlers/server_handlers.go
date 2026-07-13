@@ -528,6 +528,23 @@ func GetServerKeysHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func RescanServerKeysHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	if _, err := database.GetServer(id); err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err := server.RescanKeys(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to rescan keys: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func UploadServerKeyHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {

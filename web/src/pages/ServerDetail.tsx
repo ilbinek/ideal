@@ -268,6 +268,10 @@ function OverviewTab({
 
   const provision = useMutation({
     mutationFn: () => api.provisionServer(serverId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+    },
   });
 
   const binaryOptions = binaries.data?.binaries ?? [];
@@ -553,6 +557,11 @@ function KeysTab({ serverId }: { serverId: number }) {
   const modKeys = keys.data?.auto ?? [];
   const customKeys = keys.data?.custom ?? [];
 
+  const rescan = useMutation({
+    mutationFn: () => api.rescanServerKeys(serverId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] }),
+  });
+
   const upload = useMutation({
     mutationFn: (file: File) => api.uploadServerKey(serverId, file),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] }),
@@ -564,83 +573,107 @@ function KeysTab({ serverId }: { serverId: number }) {
   });
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Base game keys</CardTitle>
-          <CardDescription>From the branch install (includes a3.bikey).</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ul className="text-sm">
-            {baseKeys.map((k) => (
-              <li key={k} className="text-muted-foreground">
-                {k}
-              </li>
-            ))}
-            {!baseKeys.length && (
-              <li className="text-muted-foreground">
-                None yet — re-provision after the branch is installed.
-              </li>
-            )}
-          </ul>
-        </CardContent>
-      </Card>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          Keys are rebuilt on server start, when mods are saved, after mod downloads for
+          assigned mods, and when you rescan here.
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => rescan.mutate()}
+          disabled={rescan.isPending}
+        >
+          {rescan.isPending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="size-3.5" />
+          )}
+          Rescan keys
+        </Button>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Mod keys</CardTitle>
-          <CardDescription>Auto-extracted from configured mods (read-only).</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ul className="text-sm">
-            {modKeys.map((k) => (
-              <li key={k} className="text-muted-foreground">
-                {k}
-              </li>
-            ))}
-            {!modKeys.length && (
-              <li className="text-muted-foreground">None yet — save mods and provision.</li>
-            )}
-          </ul>
-        </CardContent>
-      </Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Base game keys</CardTitle>
+            <CardDescription>From the branch install (includes a3.bikey).</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="text-sm">
+              {baseKeys.map((k) => (
+                <li key={k} className="text-muted-foreground">
+                  {k}
+                </li>
+              ))}
+              {!baseKeys.length && (
+                <li className="text-muted-foreground">
+                  None yet — install the branch and rescan, or start the server once.
+                </li>
+              )}
+            </ul>
+          </CardContent>
+        </Card>
 
-      <Card className="lg:col-span-2">
-        <CardHeader>
-          <CardTitle className="text-base">Custom keys</CardTitle>
-          <CardDescription>Always loaded in addition to base and mod keys.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".bikey"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) upload.mutate(f);
-              e.target.value = "";
-            }}
-          />
-          <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
-            <Upload className="size-3.5" /> Upload .bikey
-          </Button>
-          <ul className="text-sm">
-            {customKeys.map((k) => (
-              <li key={k.id} className="flex items-center justify-between gap-2">
-                <span>{k.filename}</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => remove.mutate(k.id)}
-                >
-                  <Trash2 className="size-3.5" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Mod keys</CardTitle>
+            <CardDescription>Auto-extracted from configured mods (read-only).</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="text-sm">
+              {modKeys.map((k) => (
+                <li key={k} className="text-muted-foreground">
+                  {k}
+                </li>
+              ))}
+              {!modKeys.length && (
+                <li className="text-muted-foreground">
+                  None yet — assign downloaded mods and rescan.
+                </li>
+              )}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-base">Custom keys</CardTitle>
+            <CardDescription>Always loaded in addition to base and mod keys.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".bikey"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) upload.mutate(f);
+                e.target.value = "";
+              }}
+            />
+            <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
+              <Upload className="size-3.5" /> Upload .bikey
+            </Button>
+            <ul className="text-sm">
+              {customKeys.map((k) => (
+                <li key={k.id} className="flex items-center justify-between gap-2">
+                  <span>{k.filename}</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => remove.mutate(k.id)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

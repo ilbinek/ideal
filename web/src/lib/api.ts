@@ -215,6 +215,8 @@ export const api = {
 
   // Server keys
   getServerKeys: (id: number) => request<ServerKeysResponse>(`/api/servers/${id}/keys`),
+  rescanServerKeys: (id: number) =>
+    request<{ ok: boolean }>(`/api/servers/${id}/keys/rescan`, { method: "POST" }),
   uploadServerKey: (id: number, file: File) => {
     const form = new FormData();
     form.append("key", file);
