@@ -98,6 +98,31 @@ func InstallBranchHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func ListBranchBinariesHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid branch id")
+		return
+	}
+	branch, err := database.GetBranch(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "branch not found")
+		return
+	}
+	bins := server.ListServerBinaries(branch.InstallPath)
+	if bins == nil {
+		bins = []string{}
+	}
+	preferred := ""
+	if rel, ok := server.FindServerBinary(branch.InstallPath); ok {
+		preferred = filepath.Base(filepath.FromSlash(rel))
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"binaries":  bins,
+		"preferred": preferred,
+	})
+}
+
 func BranchInstallStreamHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -146,12 +171,13 @@ func GetServersHandler(w http.ResponseWriter, r *http.Request) {
 
 func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name        string `json:"name"`
-		BranchID    int    `json:"branchId"`
-		ModsetID    *int   `json:"modsetId"`
-		GamePort    int    `json:"gamePort"`
-		SteamPort   int    `json:"steamPort"`
-		ProfileName string `json:"profileName"`
+		Name         string `json:"name"`
+		BranchID     int    `json:"branchId"`
+		ModsetID     *int   `json:"modsetId"`
+		GamePort     int    `json:"gamePort"`
+		SteamPort    int    `json:"steamPort"`
+		ProfileName  string `json:"profileName"`
+		ServerBinary string `json:"serverBinary"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -179,7 +205,7 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return false
 	})
 
-	id, err := database.CreateServer(body.Name, slug, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName)
+	id, err := database.CreateServer(body.Name, slug, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create server: "+err.Error())
 		return
@@ -225,6 +251,7 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		GamePort          int    `json:"gamePort"`
 		SteamPort         int    `json:"steamPort"`
 		ProfileName       string `json:"profileName"`
+		ServerBinary      string `json:"serverBinary"`
 		ExtraLaunchParams string `json:"extraLaunchParams"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -237,7 +264,7 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modsetChanged := !modsetIDsEqual(existing.ModsetID, body.ModsetID)
-	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ExtraLaunchParams); err != nil {
+	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.ExtraLaunchParams); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update server")
 		return
 	}

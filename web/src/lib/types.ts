@@ -99,6 +99,7 @@ export interface GameServer {
   gamePort: number;
   steamPort: number;
   profileName: string;
+  serverBinary: string;
   extraLaunchParams: string;
   status: ServerStatus;
   pid: number;

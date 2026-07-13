@@ -154,6 +154,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/branches/${id}`, { method: "DELETE" }),
   installBranch: (id: number) =>
     request<{ ok: boolean }>(`/api/branches/${id}/install`, { method: "POST" }),
+  getBranchBinaries: (id: number) =>
+    request<{ binaries: string[]; preferred: string }>(`/api/branches/${id}/binaries`),
 
   // Servers
   getServers: () => request<GameServer[]>("/api/servers"),
@@ -164,6 +166,7 @@ export const api = {
     gamePort?: number;
     steamPort?: number;
     profileName?: string;
+    serverBinary?: string;
   }) =>
     request<{ id: number; slug: string }>("/api/servers", {
       method: "POST",
@@ -179,6 +182,7 @@ export const api = {
       gamePort: number;
       steamPort: number;
       profileName: string;
+      serverBinary: string;
       extraLaunchParams: string;
     },
   ) =>

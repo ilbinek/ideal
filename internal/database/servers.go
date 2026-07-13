@@ -36,6 +36,7 @@ type Server struct {
 	GamePort          int       `json:"gamePort"`
 	SteamPort         int       `json:"steamPort"`
 	ProfileName       string    `json:"profileName"`
+	ServerBinary      string    `json:"serverBinary"`
 	ExtraLaunchParams string    `json:"extraLaunchParams"`
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
@@ -80,6 +81,7 @@ func migrateServers() error {
 			game_port INTEGER NOT NULL DEFAULT 2302,
 			steam_port INTEGER NOT NULL DEFAULT 2303,
 			profile_name TEXT NOT NULL DEFAULT 'Server',
+			server_binary TEXT DEFAULT '',
 			extra_launch_params TEXT DEFAULT '',
 			status TEXT DEFAULT 'stopped',
 			pid INTEGER DEFAULT 0,
@@ -121,7 +123,22 @@ func migrateServers() error {
 	if err := fixPerformanceBranchCode(); err != nil {
 		return err
 	}
-	return migrateBranchInstallPaths()
+	if err := migrateBranchInstallPaths(); err != nil {
+		return err
+	}
+	return migrateServerColumns()
+}
+
+func migrateServerColumns() error {
+	alters := []string{
+		"ALTER TABLE servers ADD COLUMN server_binary TEXT DEFAULT ''",
+	}
+	for _, stmt := range alters {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 func fixPerformanceBranchCode() error {
@@ -287,7 +304,7 @@ func SetBranchInstalled(id int, installed bool) error {
 func GetServers() ([]Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(extra_launch_params, ''), status, pid, COALESCE(active_rpt, ''),
+		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''), status, pid, COALESCE(active_rpt, ''),
 		       created_at, updated_at
 		FROM servers ORDER BY name`)
 	if err != nil {
@@ -300,7 +317,7 @@ func GetServers() ([]Server, error) {
 func GetServer(id int) (*Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(extra_launch_params, ''), status, pid, COALESCE(active_rpt, ''),
+		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''), status, pid, COALESCE(active_rpt, ''),
 		       created_at, updated_at
 		FROM servers WHERE id = ?`, id)
 	if err != nil {
@@ -324,7 +341,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 		var modsetID sql.NullInt64
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
-			&s.ProfileName, &s.ExtraLaunchParams, &s.Status, &s.PID, &s.ActiveRPT,
+			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &s.Status, &s.PID, &s.ActiveRPT,
 			&s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -338,14 +355,14 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 	return servers, rows.Err()
 }
 
-func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, steamPort int, profileName string) (int64, error) {
+func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary string) (int64, error) {
 	if profileName == "" {
 		profileName = "Server"
 	}
 	result, err := db.Exec(`
-		INSERT INTO servers (name, slug, branch_id, modset_id, game_port, steam_port, profile_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		name, slug, branchID, modsetID, gamePort, steamPort, profileName,
+		INSERT INTO servers (name, slug, branch_id, modset_id, game_port, steam_port, profile_name, server_binary)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		name, slug, branchID, modsetID, gamePort, steamPort, profileName, strings.TrimSpace(serverBinary),
 	)
 	if err != nil {
 		return 0, err
@@ -353,12 +370,12 @@ func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, stea
 	return result.LastInsertId()
 }
 
-func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, extraLaunchParams string) error {
+func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, extraLaunchParams string) error {
 	_, err := db.Exec(`
 		UPDATE servers SET name = ?, branch_id = ?, modset_id = ?, game_port = ?, steam_port = ?,
-			profile_name = ?, extra_launch_params = ?, updated_at = CURRENT_TIMESTAMP
+			profile_name = ?, server_binary = ?, extra_launch_params = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`,
-		name, branchID, modsetID, gamePort, steamPort, profileName, extraLaunchParams, id,
+		name, branchID, modsetID, gamePort, steamPort, profileName, strings.TrimSpace(serverBinary), extraLaunchParams, id,
 	)
 	return err
 }
@@ -497,7 +514,7 @@ func GetServerKey(id int) (*ServerKey, error) {
 func GetServersUsingPort(gamePort, steamPort int, excludeID int) ([]Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(extra_launch_params, ''), status, pid, COALESCE(active_rpt, ''),
+		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''), status, pid, COALESCE(active_rpt, ''),
 		       created_at, updated_at
 		FROM servers WHERE id != ? AND (game_port = ? OR steam_port = ? OR game_port = ? OR steam_port = ?)`,
 		excludeID, gamePort, steamPort, steamPort, gamePort,

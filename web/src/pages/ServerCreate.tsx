@@ -23,10 +23,17 @@ export function ServerCreate() {
   const [gamePort, setGamePort] = useState("2302");
   const [steamPort, setSteamPort] = useState("2303");
   const [profileName, setProfileName] = useState("Server");
+  const [serverBinary, setServerBinary] = useState("");
   const [error, setError] = useState("");
 
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
   const modsets = useQuery({ queryKey: ["modsets"], queryFn: () => api.getModsets() });
+  const branchIdNum = parseInt(branchId, 10);
+  const binaries = useQuery({
+    queryKey: ["branchBinaries", branchIdNum],
+    queryFn: () => api.getBranchBinaries(branchIdNum),
+    enabled: Number.isFinite(branchIdNum) && branchIdNum > 0,
+  });
 
   const create = useMutation({
     mutationFn: () =>
@@ -37,10 +44,14 @@ export function ServerCreate() {
         gamePort: parseInt(gamePort, 10) || 2302,
         steamPort: parseInt(steamPort, 10) || 2303,
         profileName,
+        serverBinary,
       }),
     onSuccess: (data) => navigate(`/servers/${data.id}`),
     onError: (e: Error) => setError(e.message),
   });
+
+  const binaryOptions = binaries.data?.binaries ?? [];
+  const preferredBinary = binaries.data?.preferred ?? "";
 
   return (
     <div className="mx-auto flex max-w-lg flex-col gap-6">
@@ -65,7 +76,13 @@ export function ServerCreate() {
 
           <div className="flex flex-col gap-2">
             <Label>Branch</Label>
-            <Select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+            <Select
+              value={branchId}
+              onChange={(e) => {
+                setBranchId(e.target.value);
+                setServerBinary("");
+              }}
+            >
               <option value="">Select branch</option>
               {branches.data?.map((b) => (
                 <option key={b.id} value={b.id}>
@@ -74,6 +91,31 @@ export function ServerCreate() {
                 </option>
               ))}
             </Select>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label>Server binary</Label>
+            <Select
+              value={serverBinary}
+              onChange={(e) => setServerBinary(e.target.value)}
+              disabled={!branchId}
+            >
+              <option value="">
+                Auto{preferredBinary ? ` (${preferredBinary})` : " (prefer 64-bit)"}
+              </option>
+              {binaryOptions.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {!branchId
+                ? "Select a branch to list available binaries."
+                : binaryOptions.length === 0
+                  ? "No arma3server binaries found in this branch yet."
+                  : "Auto prefers the 64-bit binary when available."}
+            </p>
           </div>
 
           <div className="flex flex-col gap-2">

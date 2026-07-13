@@ -210,6 +210,7 @@ function OverviewTab({
     gamePort: number;
     steamPort: number;
     profileName: string;
+    serverBinary: string;
     extraLaunchParams: string;
   };
 }) {
@@ -227,11 +228,23 @@ function OverviewTab({
   const [gamePort, setGamePort] = useState(String(srv.gamePort));
   const [steamPort, setSteamPort] = useState(String(srv.steamPort));
   const [profileName, setProfileName] = useState(srv.profileName);
+  const [serverBinary, setServerBinary] = useState(srv.serverBinary ?? "");
   const [extra, setExtra] = useState(srv.extraLaunchParams);
+
+  const branchIdNum = parseInt(branchId, 10);
+  const binaries = useQuery({
+    queryKey: ["branchBinaries", branchIdNum],
+    queryFn: () => api.getBranchBinaries(branchIdNum),
+    enabled: Number.isFinite(branchIdNum) && branchIdNum > 0,
+  });
 
   useEffect(() => {
     setModsetId(srv.modsetId ? String(srv.modsetId) : "none");
   }, [srv.modsetId]);
+
+  useEffect(() => {
+    setServerBinary(srv.serverBinary ?? "");
+  }, [srv.serverBinary]);
 
   const save = useMutation({
     mutationFn: () =>
@@ -242,6 +255,7 @@ function OverviewTab({
         gamePort: parseInt(gamePort, 10),
         steamPort: parseInt(steamPort, 10),
         profileName,
+        serverBinary,
         extraLaunchParams: extra,
       }),
     onSuccess: () => {
@@ -255,6 +269,9 @@ function OverviewTab({
   const provision = useMutation({
     mutationFn: () => api.provisionServer(serverId),
   });
+
+  const binaryOptions = binaries.data?.binaries ?? [];
+  const preferredBinary = binaries.data?.preferred ?? "";
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -280,6 +297,29 @@ function OverviewTab({
                 </option>
               ))}
             </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label>Server binary</Label>
+            <select
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={serverBinary}
+              onChange={(e) => setServerBinary(e.target.value)}
+            >
+              <option value="">
+                Auto{preferredBinary ? ` (${preferredBinary})` : " (prefer 64-bit)"}
+              </option>
+              {binaryOptions.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+              {serverBinary && !binaryOptions.includes(serverBinary) && (
+                <option value={serverBinary}>{serverBinary} (missing)</option>
+              )}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Executables found in the branch install. Auto prefers arma3server_x64.
+            </p>
           </div>
           <div className="flex flex-col gap-1">
             <Label>Modset</Label>

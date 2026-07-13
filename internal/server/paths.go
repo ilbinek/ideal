@@ -76,10 +76,31 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// FindServerBinary locates the dedicated server executable under installPath.
+// FindServerBinary locates the preferred dedicated server executable under installPath.
 // Returns the path relative to installPath and whether it was found.
 func FindServerBinary(installPath string) (string, bool) {
 	return utils.FindDedicatedServerBinaryRel(installPath)
+}
+
+// ListServerBinaries returns basenames of all arma3server* executables in the branch.
+func ListServerBinaries(installPath string) []string {
+	rels := utils.ListDedicatedServerBinaryRels(installPath)
+	out := make([]string, 0, len(rels))
+	seen := make(map[string]struct{}, len(rels))
+	for _, rel := range rels {
+		name := filepath.Base(filepath.FromSlash(rel))
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+// ResolveServerBinary picks the configured binary (basename) or auto-prefers 64-bit.
+func ResolveServerBinary(installPath, preferred string) (string, bool) {
+	return utils.ResolveDedicatedServerBinaryRel(installPath, preferred)
 }
 
 // BranchGameDir returns the directory containing server binaries and game data.

@@ -10,12 +10,12 @@ import (
 
 // LaunchArgs holds parsed launch parameters for preview and execution.
 type LaunchArgs struct {
-	Command     string   `json:"command"`
-	ModParam    string   `json:"modParam"`
-	ServerModParam string `json:"serverModParam"`
-	Binary      string   `json:"binary"`
-	Args        []string `json:"args"`
-	WorkingDir  string   `json:"workingDir"`
+	Command        string   `json:"command"`
+	ModParam       string   `json:"modParam"`
+	ServerModParam string   `json:"serverModParam"`
+	Binary         string   `json:"binary"`
+	Args           []string `json:"args"`
+	WorkingDir     string   `json:"workingDir"`
 }
 
 // BuildLaunchArgs constructs launch arguments for a server instance.
@@ -31,8 +31,11 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 	}
 
 	instanceDir := InstanceDir(srv.Slug)
-	binaryRel, ok := FindServerBinary(branch.InstallPath)
+	binaryRel, ok := ResolveServerBinary(branch.InstallPath, srv.ServerBinary)
 	if !ok {
+		if strings.TrimSpace(srv.ServerBinary) != "" {
+			return nil, fmt.Errorf("server binary %q not found in branch %q", srv.ServerBinary, branch.Name)
+		}
 		return nil, fmt.Errorf("branch %q is not installed", branch.Name)
 	}
 	binaryName := filepath.Base(filepath.FromSlash(binaryRel))

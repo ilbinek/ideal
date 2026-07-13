@@ -4,33 +4,48 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-// DedicatedServerBinaryNames lists known Arma dedicated server executable names.
+// DedicatedServerBinaryNames lists preferred Arma dedicated server executable
+// names in priority order (64-bit first). Used when no explicit binary is set.
 var DedicatedServerBinaryNames = []string{
 	"arma3server_x64",
 	"arma3server_x64.exe",
+	"arma3serverprofiling_x64",
+	"arma3serverprofiling_x64.exe",
 	"arma3server",
 	"arma3server.exe",
 }
 
-var errStopWalk = fs.ErrExist
+// isDedicatedServerBinaryName reports whether name looks like a server executable.
+func isDedicatedServerBinaryName(name string) bool {
+	lower := strings.ToLower(name)
+	if !strings.HasPrefix(lower, "arma3server") {
+		return false
+	}
+	switch filepath.Ext(lower) {
+	case "", ".exe":
+		return true
+	default:
+		return false
+	}
+}
 
-// FindDedicatedServerBinaryRel searches installRoot for a server binary and returns
-// its path relative to installRoot (forward slashes). SteamCMD installs into
-// installRoot/steamapps/common/<AppName>/ rather than installRoot directly.
-func FindDedicatedServerBinaryRel(installRoot string) (string, bool) {
+// ListDedicatedServerBinaryRels returns relative paths (forward slashes) of all
+// arma3server* executables under installRoot, sorted by preference then name.
+func ListDedicatedServerBinaryRels(installRoot string) []string {
 	abs, err := filepath.Abs(installRoot)
 	if err != nil {
 		abs = installRoot
 	}
 	info, err := os.Stat(abs)
 	if err != nil || !info.IsDir() {
-		return "", false
+		return nil
 	}
 
-	var found string
+	var found []string
 	_ = filepath.WalkDir(abs, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -48,15 +63,56 @@ func FindDedicatedServerBinaryRel(installRoot string) (string, bool) {
 		if d.IsDir() {
 			return nil
 		}
-		for _, name := range DedicatedServerBinaryNames {
-			if d.Name() == name {
-				found = filepath.ToSlash(rel)
-				return errStopWalk
-			}
+		if isDedicatedServerBinaryName(d.Name()) {
+			found = append(found, filepath.ToSlash(rel))
 		}
 		return nil
 	})
-	return found, found != ""
+
+	sort.SliceStable(found, func(i, j int) bool {
+		pi, pj := binaryPreference(filepath.Base(found[i])), binaryPreference(filepath.Base(found[j]))
+		if pi != pj {
+			return pi < pj
+		}
+		return found[i] < found[j]
+	})
+	return found
+}
+
+func binaryPreference(name string) int {
+	for i, preferred := range DedicatedServerBinaryNames {
+		if strings.EqualFold(name, preferred) {
+			return i
+		}
+	}
+	return len(DedicatedServerBinaryNames)
+}
+
+// FindDedicatedServerBinaryRel searches installRoot for a server binary and returns
+// its path relative to installRoot (forward slashes). Prefers 64-bit when multiple
+// are present. SteamCMD installs into installRoot/steamapps/common/<AppName>/.
+func FindDedicatedServerBinaryRel(installRoot string) (string, bool) {
+	found := ListDedicatedServerBinaryRels(installRoot)
+	if len(found) == 0 {
+		return "", false
+	}
+	return found[0], true
+}
+
+// ResolveDedicatedServerBinaryRel returns the relative path for preferred basename
+// (e.g. "arma3server_x64"), or the auto-preferred binary when preferred is empty.
+func ResolveDedicatedServerBinaryRel(installRoot, preferred string) (string, bool) {
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		return FindDedicatedServerBinaryRel(installRoot)
+	}
+	base := filepath.Base(preferred)
+	for _, rel := range ListDedicatedServerBinaryRels(installRoot) {
+		if strings.EqualFold(filepath.Base(rel), base) {
+			return rel, true
+		}
+	}
+	return "", false
 }
 
 // DedicatedServerGameDir returns the directory that contains the server binary
