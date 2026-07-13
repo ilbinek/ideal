@@ -36,10 +36,12 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("GET /api/modsets", apiAuth(GetModsetsHandler))
 	mux.HandleFunc("POST /api/modsets/upload", apiAuth(UploadModsetAPIHandler))
 	mux.HandleFunc("DELETE /api/modsets/{id}", apiAuth(DeleteModsetAPIHandler))
+	mux.HandleFunc("DELETE /api/modsets/{id}/mods/{modId}", apiAuth(RemoveModFromModsetAPIHandler))
 
 	// Mods
 	mux.HandleFunc("GET /api/mods", apiAuth(GetModsHandler))
 	mux.HandleFunc("POST /api/mods", apiAuth(AddModAPIHandler))
+	mux.HandleFunc("POST /api/mods/bulk-delete", apiAuth(BulkDeleteModsHandler))
 	mux.HandleFunc("DELETE /api/mods/{id}", apiAuth(DeleteModAPIHandler))
 	mux.HandleFunc("POST /api/mods/check-updates", apiAuth(CheckUpdatesAPIHandler))
 	mux.HandleFunc("POST /api/mods/{id}/download", apiAuth(DownloadModAPIHandler))

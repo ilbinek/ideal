@@ -247,17 +247,10 @@ func AddModAPIHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"workshopId": body.WorkshopID, "name": modName})
 }
 
-func DeleteModAPIHandler(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid mod id")
-		return
-	}
-
+func deleteModFilesAndRecord(id int) error {
 	mod, err := database.GetMod(id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get mod info")
-		return
+		return err
 	}
 
 	if mod.LocalPath != "" {
@@ -269,15 +262,88 @@ func DeleteModAPIHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := database.DeleteMod(id); err != nil {
+	return database.DeleteMod(id)
+}
+
+func DeleteModAPIHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid mod id")
+		return
+	}
+
+	if err := deleteModFilesAndRecord(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete mod")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func BulkDeleteModsHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []int `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids required")
+		return
+	}
+
+	deleted := 0
+	var failed []int
+	for _, id := range body.IDs {
+		if err := deleteModFilesAndRecord(id); err != nil {
+			log.Printf("[ERROR] Bulk delete failed for mod %d: %v", id, err)
+			failed = append(failed, id)
+			continue
+		}
+		deleted++
+	}
+	if failed == nil {
+		failed = []int{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "failed": failed})
+}
+
+func RemoveModFromModsetAPIHandler(w http.ResponseWriter, r *http.Request) {
+	modsetID, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid modset id")
+		return
+	}
+	modID, err := strconv.Atoi(r.PathValue("modId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid mod id")
+		return
+	}
+
+	if err := database.RemoveModFromModset(modsetID, modID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove mod from modset")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func CheckUpdatesAPIHandler(w http.ResponseWriter, r *http.Request) {
-	mods, err := database.GetAllMods()
+	var body struct {
+		Modset *int `json:"modset"`
+	}
+	// Empty body is fine (check all mods).
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	var mods []database.Mod
+	var err error
+	if body.Modset != nil {
+		mods, err = database.GetMods(*body.Modset)
+	} else if q := r.URL.Query().Get("modset"); q != "" {
+		modsetID, _ := strconv.Atoi(q)
+		mods, err = database.GetMods(modsetID)
+	} else {
+		mods, err = database.GetAllMods()
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch mods")
 		return
@@ -351,11 +417,24 @@ func DownloadModAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 func EnqueueDownloadsHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Scope  string `json:"scope"` // "all", "outdated", "missing"
+		Scope  string `json:"scope"` // "all", "outdated", "missing", "ids"
 		Modset *int   `json:"modset"`
+		IDs    []int  `json:"ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	// Explicit ID list: enqueue every matching mod (download / redownload).
+	if len(body.IDs) > 0 {
+		targets, err := database.GetModsByIDs(body.IDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to fetch mods")
+			return
+		}
+		added := queue.Default.Enqueue(targets)
+		writeJSON(w, http.StatusOK, map[string]int{"enqueued": added})
 		return
 	}
 

@@ -112,6 +112,10 @@ export const api = {
   },
   deleteModset: (id: number) =>
     request<{ ok: boolean }>(`/api/modsets/${id}`, { method: "DELETE" }),
+  removeModFromModset: (modsetId: number, modId: number) =>
+    request<{ ok: boolean }>(`/api/modsets/${modsetId}/mods/${modId}`, {
+      method: "DELETE",
+    }),
 
   // Mods
   getMods: (modset?: number) =>
@@ -123,9 +127,15 @@ export const api = {
     }),
   deleteMod: (id: number) =>
     request<{ ok: boolean }>(`/api/mods/${id}`, { method: "DELETE" }),
-  checkUpdates: () =>
+  bulkDeleteMods: (ids: number[]) =>
+    request<{ deleted: number; failed: number[] }>("/api/mods/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+  checkUpdates: (modset?: number) =>
     request<Record<string, boolean>>("/api/mods/check-updates", {
       method: "POST",
+      body: JSON.stringify({ modset: modset ?? null }),
     }),
   downloadMod: (id: number) =>
     request<{ status: string }>(`/api/mods/${id}/download`, { method: "POST" }),
@@ -135,6 +145,11 @@ export const api = {
     request<{ enqueued: number }>("/api/downloads/enqueue", {
       method: "POST",
       body: JSON.stringify({ scope, modset: modset ?? null }),
+    }),
+  enqueueIds: (ids: number[]) =>
+    request<{ enqueued: number }>("/api/downloads/enqueue", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
     }),
   downloadStatus: () => request<QueueSnapshot>("/api/downloads/status"),
 

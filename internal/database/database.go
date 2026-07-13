@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -331,6 +332,56 @@ func UpdateModChecked(id int, updateAvailable bool) error {
 func DeleteMod(id int) error {
 	_, err := db.Exec("DELETE FROM mods WHERE id = ?", id)
 	return err
+}
+
+// RemoveModFromModset unlinks a mod from a modset without deleting the mod itself.
+func RemoveModFromModset(modsetID, modID int) error {
+	_, err := db.Exec(
+		"DELETE FROM modset_mods WHERE modset_id = ? AND mod_id = ?",
+		modsetID, modID,
+	)
+	return err
+}
+
+// GetModsByIDs returns mods matching the given IDs (order not guaranteed).
+func GetModsByIDs(ids []int) ([]Mod, error) {
+	if len(ids) == 0 {
+		return []Mod{}, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`
+		SELECT id, workshop_id, name, downloaded, COALESCE(local_path, ''),
+		       COALESCE(last_updated, ''), COALESCE(last_checked, ''), update_available
+		FROM mods
+		WHERE id IN (%s)`, strings.Join(placeholders, ","))
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var mods []Mod
+	for rows.Next() {
+		var m Mod
+		var lastUpdated, lastChecked string
+		if err := rows.Scan(&m.ID, &m.WorkshopID, &m.Name, &m.Downloaded,
+			&m.LocalPath, &lastUpdated, &lastChecked, &m.UpdateAvailable); err != nil {
+			return nil, err
+		}
+		if lastUpdated != "" {
+			m.LastUpdated, _ = time.Parse("2006-01-02 15:04:05", lastUpdated)
+		}
+		if lastChecked != "" {
+			m.LastChecked, _ = time.Parse("2006-01-02 15:04:05", lastChecked)
+		}
+		mods = append(mods, m)
+	}
+	return mods, rows.Err()
 }
 
 func GetMod(id int) (*Mod, error) {

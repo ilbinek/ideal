@@ -1,7 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Download,
   ExternalLink,
   FolderSync,
@@ -9,10 +12,13 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
+  Search,
   Trash2,
+  Unlink,
+  X,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import type { DownloadScope, Mod } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +47,106 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useDownloads } from "@/hooks/useDownloads";
 
+type StatusFilter = "all" | "downloaded" | "missing" | "outdated";
+type SortKey = "name" | "workshopId" | "status" | "lastUpdated" | "lastChecked";
+type SortDir = "asc" | "desc";
+
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "downloaded", label: "Downloaded" },
+  { value: "missing", label: "Missing" },
+  { value: "outdated", label: "Update available" },
+];
+
+function statusRank(mod: Mod): number {
+  if (mod.updateAvailable) return 2;
+  if (!mod.downloaded) return 1;
+  return 0;
+}
+
+function compareMods(a: Mod, b: Mod, key: SortKey, dir: SortDir): number {
+  const mul = dir === "asc" ? 1 : -1;
+  let cmp = 0;
+  switch (key) {
+    case "name":
+      cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      break;
+    case "workshopId":
+      cmp = a.workshopId.localeCompare(b.workshopId, undefined, { numeric: true });
+      break;
+    case "status":
+      cmp = statusRank(a) - statusRank(b);
+      break;
+    case "lastUpdated":
+      cmp = (a.lastUpdated || "").localeCompare(b.lastUpdated || "");
+      break;
+    case "lastChecked":
+      cmp = (a.lastChecked || "").localeCompare(b.lastChecked || "");
+      break;
+  }
+  return cmp * mul;
+}
+
+function Checkbox({
+  checked,
+  indeterminate,
+  onChange,
+  "aria-label": ariaLabel,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: (checked: boolean) => void;
+  "aria-label": string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      className="size-4 cursor-pointer rounded border-border accent-primary"
+      checked={checked}
+      ref={(el) => {
+        if (el) el.indeterminate = !!indeterminate && !checked;
+      }}
+      onChange={(e) => onChange(e.target.checked)}
+      aria-label={ariaLabel}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+function SortableHead({
+  label,
+  sortKey,
+  currentKey,
+  dir,
+  onSort,
+  className,
+}: {
+  label: string;
+  sortKey: SortKey;
+  currentKey: SortKey;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = currentKey === sortKey;
+  const Icon = !active ? ArrowUpDown : dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        className={cn(
+          "inline-flex items-center gap-1.5 font-medium hover:text-foreground",
+          active ? "text-foreground" : "text-muted-foreground",
+        )}
+        onClick={() => onSort(sortKey)}
+      >
+        {label}
+        <Icon className="size-3.5" />
+      </button>
+    </TableHead>
+  );
+}
+
 function StatusCell({ mod }: { mod: Mod }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -54,12 +160,18 @@ function StatusCell({ mod }: { mod: Mod }) {
   );
 }
 
-function RowActions({ mod }: { mod: Mod }) {
+function RowActions({
+  mod,
+  modset,
+}: {
+  mod: Mod;
+  modset?: number;
+}) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { itemFor } = useDownloads();
   const item = itemFor(mod.id);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const download = useMutation({
     mutationFn: () => api.downloadMod(mod.id),
@@ -67,19 +179,31 @@ function RowActions({ mod }: { mod: Mod }) {
       toast.error("Download failed", e instanceof ApiError ? e.message : undefined),
   });
 
-  const remove = useMutation({
+  const removePermanent = useMutation({
     mutationFn: () => api.deleteMod(mod.id),
     onSuccess: () => {
       toast.success("Mod deleted");
       queryClient.invalidateQueries({ queryKey: ["mods"] });
-      setConfirmDelete(false);
+      setConfirmOpen(false);
     },
     onError: (e) =>
       toast.error("Delete failed", e instanceof ApiError ? e.message : undefined),
   });
 
+  const unlink = useMutation({
+    mutationFn: () => api.removeModFromModset(modset!, mod.id),
+    onSuccess: () => {
+      toast.success("Removed from modset");
+      queryClient.invalidateQueries({ queryKey: ["mods"] });
+      setConfirmOpen(false);
+    },
+    onError: (e) =>
+      toast.error("Remove failed", e instanceof ApiError ? e.message : undefined),
+  });
+
   const busy =
     download.isPending || item?.status === "queued" || item?.status === "downloading";
+  const actionPending = removePermanent.isPending || unlink.isPending;
 
   let label = mod.downloaded ? "Redownload" : "Download";
   let Icon = mod.downloaded ? RotateCw : Download;
@@ -108,8 +232,8 @@ function RowActions({ mod }: { mod: Mod }) {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => setConfirmDelete(true)}
-          title="Delete mod"
+          onClick={() => setConfirmOpen(true)}
+          title={modset ? "Remove or delete" : "Delete mod"}
         >
           <Trash2 className="size-4 text-destructive" />
         </Button>
@@ -127,26 +251,52 @@ function RowActions({ mod }: { mod: Mod }) {
         </div>
       )}
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete mod?</DialogTitle>
+            <DialogTitle>{modset ? "Remove mod?" : "Delete mod?"}</DialogTitle>
             <DialogDescription>
-              This removes “{mod.name}” from the database and deletes its downloaded files.
+              {modset
+                ? `Choose how to handle “${mod.name}” in this modset.`
+                : `This removes “${mod.name}” from the database and deletes its downloaded files.`}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
             <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button variant="outline" disabled={actionPending}>
+                Cancel
+              </Button>
             </DialogClose>
-            <Button
-              variant="destructive"
-              disabled={remove.isPending}
-              onClick={() => remove.mutate()}
-            >
-              {remove.isPending && <Loader2 className="size-4 animate-spin" />}
-              Delete
-            </Button>
+            {modset ? (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={actionPending}
+                  onClick={() => unlink.mutate()}
+                >
+                  {unlink.isPending && <Loader2 className="size-4 animate-spin" />}
+                  <Unlink className="size-4" />
+                  Remove from modset
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={actionPending}
+                  onClick={() => removePermanent.mutate()}
+                >
+                  {removePermanent.isPending && <Loader2 className="size-4 animate-spin" />}
+                  Delete permanently
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="destructive"
+                disabled={actionPending}
+                onClick={() => removePermanent.mutate()}
+              >
+                {removePermanent.isPending && <Loader2 className="size-4 animate-spin" />}
+                Delete
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -236,12 +386,43 @@ function AddModDialog({ modset }: { modset?: number }) {
   );
 }
 
+function parseStatusFilter(raw: string | null): StatusFilter {
+  if (raw === "downloaded" || raw === "missing" || raw === "outdated") return raw;
+  return "all";
+}
+
+function parseSortKey(raw: string | null): SortKey {
+  if (
+    raw === "name" ||
+    raw === "workshopId" ||
+    raw === "status" ||
+    raw === "lastUpdated" ||
+    raw === "lastChecked"
+  ) {
+    return raw;
+  }
+  return "name";
+}
+
+function parseSortDir(raw: string | null): SortDir {
+  return raw === "desc" ? "desc" : "asc";
+}
+
 export function Mods() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const modsetParam = params.get("modset");
   const modset = modsetParam ? Number(modsetParam) : undefined;
+
+  const search = params.get("q") ?? "";
+  const statusFilter = parseStatusFilter(params.get("status"));
+  const sortKey = parseSortKey(params.get("sort"));
+  const sortDir = parseSortDir(params.get("dir"));
+
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkUnlinkOpen, setBulkUnlinkOpen] = useState(false);
 
   const { snapshot } = useDownloads();
   const { data: modsets } = useQuery({ queryKey: ["modsets"], queryFn: () => api.getModsets() });
@@ -250,13 +431,111 @@ export function Mods() {
     queryFn: () => api.getMods(modset),
   });
 
+  const updateParams = (patch: Record<string, string | null>) => {
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null || value === "") next.delete(key);
+        else next.set(key, value);
+      }
+      return next;
+    }, { replace: true });
+  };
+
+  const setModsetFilter = (value: string) => {
+    setSelected(new Set());
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set("modset", value);
+      else next.delete("modset");
+      return next;
+    }, { replace: true });
+  };
+
   const counts = useMemo(() => {
     const list = mods ?? [];
     return {
+      all: list.length,
+      downloaded: list.filter((m) => m.downloaded).length,
       missing: list.filter((m) => !m.downloaded).length,
-      outdated: list.filter((m) => m.downloaded && m.updateAvailable).length,
+      outdated: list.filter((m) => m.updateAvailable).length,
     };
   }, [mods]);
+
+  const visibleMods = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = mods ?? [];
+
+    if (q) {
+      list = list.filter(
+        (m) =>
+          m.name.toLowerCase().includes(q) || m.workshopId.toLowerCase().includes(q),
+      );
+    }
+
+    switch (statusFilter) {
+      case "downloaded":
+        list = list.filter((m) => m.downloaded);
+        break;
+      case "missing":
+        list = list.filter((m) => !m.downloaded);
+        break;
+      case "outdated":
+        list = list.filter((m) => m.updateAvailable);
+        break;
+    }
+
+    return [...list].sort((a, b) => compareMods(a, b, sortKey, sortDir));
+  }, [mods, search, statusFilter, sortKey, sortDir]);
+
+  // Drop selections that are no longer visible.
+  useEffect(() => {
+    const visible = new Set(visibleMods.map((m) => m.id));
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set<number>();
+      for (const id of prev) {
+        if (visible.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [visibleMods]);
+
+  const allVisibleSelected =
+    visibleMods.length > 0 && visibleMods.every((m) => selected.has(m.id));
+  const someVisibleSelected =
+    visibleMods.some((m) => selected.has(m.id)) && !allVisibleSelected;
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      updateParams({ dir: sortDir === "asc" ? "desc" : "asc" });
+    } else {
+      updateParams({ sort: key, dir: "asc" });
+    }
+  };
+
+  const toggleOne = (id: number, checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const toggleAllVisible = (checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const m of visibleMods) {
+        if (checked) next.add(m.id);
+        else next.delete(m.id);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelected(new Set());
 
   const enqueue = useMutation({
     mutationFn: (scope: DownloadScope) => api.enqueue(scope, modset),
@@ -268,8 +547,19 @@ export function Mods() {
       toast.error("Failed to queue", e instanceof ApiError ? e.message : undefined),
   });
 
+  const enqueueSelected = useMutation({
+    mutationFn: () => api.enqueueIds([...selected]),
+    onSuccess: (res) => {
+      if (res.enqueued === 0) toast.success("Nothing to download", "Selected mods already queued.");
+      else toast.success(`Queued ${res.enqueued} mod(s)`);
+      clearSelection();
+    },
+    onError: (e) =>
+      toast.error("Failed to queue", e instanceof ApiError ? e.message : undefined),
+  });
+
   const checkUpdates = useMutation({
-    mutationFn: () => api.checkUpdates(),
+    mutationFn: () => api.checkUpdates(modset),
     onSuccess: (updates) => {
       const count = Object.values(updates).filter(Boolean).length;
       toast.success("Update check complete", `${count} update(s) available.`);
@@ -286,6 +576,54 @@ export function Mods() {
       toast.error("A3Sync failed", e instanceof ApiError ? e.message : undefined),
   });
 
+  const bulkDelete = useMutation({
+    mutationFn: () => api.bulkDeleteMods([...selected]),
+    onSuccess: (res) => {
+      if (res.failed.length === 0) {
+        toast.success(`Deleted ${res.deleted} mod(s)`);
+      } else {
+        toast.error(
+          `Deleted ${res.deleted}, failed ${res.failed.length}`,
+          `Could not delete: ${res.failed.join(", ")}`,
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["mods"] });
+      clearSelection();
+      setBulkDeleteOpen(false);
+    },
+    onError: (e) =>
+      toast.error("Bulk delete failed", e instanceof ApiError ? e.message : undefined),
+  });
+
+  const bulkUnlink = useMutation({
+    mutationFn: async () => {
+      if (!modset) return { ok: 0, failed: 0 };
+      let ok = 0;
+      let failed = 0;
+      for (const id of selected) {
+        try {
+          await api.removeModFromModset(modset, id);
+          ok++;
+        } catch {
+          failed++;
+        }
+      }
+      return { ok, failed };
+    },
+    onSuccess: (res) => {
+      if (res.failed === 0) toast.success(`Removed ${res.ok} mod(s) from modset`);
+      else toast.error(`Removed ${res.ok}, failed ${res.failed}`);
+      queryClient.invalidateQueries({ queryKey: ["mods"] });
+      clearSelection();
+      setBulkUnlinkOpen(false);
+    },
+    onError: (e) =>
+      toast.error("Remove failed", e instanceof ApiError ? e.message : undefined),
+  });
+
+  const selectedCount = selected.size;
+  const hasMods = (mods?.length ?? 0) > 0;
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -296,13 +634,7 @@ export function Mods() {
           </p>
         </div>
         <div className="w-56">
-          <Select
-            value={modsetParam ?? ""}
-            onChange={(e) => {
-              const v = e.target.value;
-              setParams(v ? { modset: v } : {});
-            }}
-          >
+          <Select value={modsetParam ?? ""} onChange={(e) => setModsetFilter(e.target.value)}>
             <option value="">All mods</option>
             {modsets?.map((m) => (
               <option key={m.id} value={m.id}>
@@ -379,57 +711,201 @@ export function Mods() {
       )}
 
       <Card>
+        <CardContent className="flex flex-col gap-3 p-4">
+          <div className="relative max-w-md">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => updateParams({ q: e.target.value || null })}
+              placeholder="Search by name or Workshop ID…"
+              className="pl-9"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {STATUS_FILTERS.map((f) => {
+              const count =
+                f.value === "all"
+                  ? counts.all
+                  : f.value === "downloaded"
+                    ? counts.downloaded
+                    : f.value === "missing"
+                      ? counts.missing
+                      : counts.outdated;
+              const active = statusFilter === f.value;
+              return (
+                <Button
+                  key={f.value}
+                  size="sm"
+                  variant={active ? "default" : "outline"}
+                  onClick={() =>
+                    updateParams({ status: f.value === "all" ? null : f.value })
+                  }
+                >
+                  {f.label} ({count})
+                </Button>
+              );
+            })}
+            <span className="ml-auto text-sm text-muted-foreground">
+              Showing {visibleMods.length}
+              {hasMods ? ` of ${mods!.length}` : ""}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {selectedCount > 0 && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-2 p-4">
+            <span className="text-sm font-medium">{selectedCount} selected</span>
+            <Button
+              size="sm"
+              onClick={() => enqueueSelected.mutate()}
+              disabled={enqueueSelected.isPending}
+            >
+              {enqueueSelected.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
+              Download selected
+            </Button>
+            {modset && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBulkUnlinkOpen(true)}
+                disabled={bulkUnlink.isPending}
+              >
+                <Unlink className="size-4" />
+                Remove from modset
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => setBulkDeleteOpen(true)}
+              disabled={bulkDelete.isPending}
+            >
+              <Trash2 className="size-4" />
+              Delete permanently
+            </Button>
+            <Button size="sm" variant="ghost" onClick={clearSelection}>
+              <X className="size-4" />
+              Clear
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
         <CardContent className="p-0">
           {isLoading ? (
             <div className="flex items-center justify-center p-10 text-muted-foreground">
               <Loader2 className="size-5 animate-spin" />
             </div>
-          ) : mods && mods.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Workshop</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Last updated</TableHead>
-                  <TableHead>Last checked</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {mods.map((mod) => (
-                  <TableRow
-                    key={mod.id}
-                    data-state={mod.updateAvailable ? "highlight" : undefined}
-                  >
-                    <TableCell className="font-medium">{mod.name}</TableCell>
-                    <TableCell>
-                      <a
-                        href={`https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.workshopId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-primary hover:underline"
-                      >
-                        {mod.workshopId}
-                        <ExternalLink className="size-3" />
-                      </a>
-                    </TableCell>
-                    <TableCell>
-                      <StatusCell mod={mod} />
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">
-                      {formatDate(mod.lastUpdated)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">
-                      {formatDate(mod.lastChecked)}
-                    </TableCell>
-                    <TableCell>
-                      <RowActions mod={mod} />
-                    </TableCell>
+          ) : hasMods ? (
+            visibleMods.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={allVisibleSelected}
+                        indeterminate={someVisibleSelected}
+                        onChange={toggleAllVisible}
+                        aria-label="Select all visible mods"
+                      />
+                    </TableHead>
+                    <SortableHead
+                      label="Name"
+                      sortKey="name"
+                      currentKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableHead
+                      label="Workshop"
+                      sortKey="workshopId"
+                      currentKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableHead
+                      label="Status"
+                      sortKey="status"
+                      currentKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableHead
+                      label="Last updated"
+                      sortKey="lastUpdated"
+                      currentKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <SortableHead
+                      label="Last checked"
+                      sortKey="lastChecked"
+                      currentKey={sortKey}
+                      dir={sortDir}
+                      onSort={toggleSort}
+                    />
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {visibleMods.map((mod) => (
+                    <TableRow
+                      key={mod.id}
+                      data-state={
+                        selected.has(mod.id)
+                          ? "selected"
+                          : mod.updateAvailable
+                            ? "highlight"
+                            : undefined
+                      }
+                    >
+                      <TableCell>
+                        <Checkbox
+                          checked={selected.has(mod.id)}
+                          onChange={(checked) => toggleOne(mod.id, checked)}
+                          aria-label={`Select ${mod.name}`}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium">{mod.name}</TableCell>
+                      <TableCell>
+                        <a
+                          href={`https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.workshopId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline"
+                        >
+                          {mod.workshopId}
+                          <ExternalLink className="size-3" />
+                        </a>
+                      </TableCell>
+                      <TableCell>
+                        <StatusCell mod={mod} />
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-muted-foreground">
+                        {formatDate(mod.lastUpdated)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-muted-foreground">
+                        {formatDate(mod.lastChecked)}
+                      </TableCell>
+                      <TableCell>
+                        <RowActions mod={mod} modset={modset} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="p-10 text-center text-sm text-muted-foreground">
+                No mods match the current search or filters.
+              </p>
+            )
           ) : (
             <p className="p-10 text-center text-sm text-muted-foreground">
               No mods found. Import a modset or add a mod by Workshop ID.
@@ -437,6 +913,57 @@ export function Mods() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {selectedCount} mod(s)?</DialogTitle>
+            <DialogDescription>
+              This permanently removes the selected mods from the database and deletes their
+              downloaded files. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={bulkDelete.isPending}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              disabled={bulkDelete.isPending}
+              onClick={() => bulkDelete.mutate()}
+            >
+              {bulkDelete.isPending && <Loader2 className="size-4 animate-spin" />}
+              Delete permanently
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bulkUnlinkOpen} onOpenChange={setBulkUnlinkOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove {selectedCount} mod(s) from modset?</DialogTitle>
+            <DialogDescription>
+              Mods stay in the global catalog and downloaded files are kept. Only the link to
+              this modset is removed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={bulkUnlink.isPending}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button disabled={bulkUnlink.isPending} onClick={() => bulkUnlink.mutate()}>
+              {bulkUnlink.isPending && <Loader2 className="size-4 animate-spin" />}
+              <Unlink className="size-4" />
+              Remove from modset
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
