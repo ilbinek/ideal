@@ -14,6 +14,7 @@ import (
 
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/server"
+	"arma3modmanager/internal/utils"
 )
 
 // --- Branches ---
@@ -171,14 +172,13 @@ func GetServersHandler(w http.ResponseWriter, r *http.Request) {
 
 func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name          string `json:"name"`
-		BranchID      int    `json:"branchId"`
-		ModsetID      *int   `json:"modsetId"`
-		GamePort      int    `json:"gamePort"`
-		SteamPort     int    `json:"steamPort"`
-		ProfileName   string `json:"profileName"`
-		ServerBinary  string `json:"serverBinary"`
-		LocalModsRoot string `json:"localModsRoot"`
+		Name         string `json:"name"`
+		BranchID     int    `json:"branchId"`
+		ModsetID     *int   `json:"modsetId"`
+		GamePort     int    `json:"gamePort"`
+		SteamPort    int    `json:"steamPort"`
+		ProfileName  string `json:"profileName"`
+		ServerBinary string `json:"serverBinary"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -206,7 +206,7 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return false
 	})
 
-	id, err := database.CreateServer(body.Name, slug, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.LocalModsRoot)
+	id, err := database.CreateServer(body.Name, slug, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create server: "+err.Error())
 		return
@@ -253,7 +253,6 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		SteamPort         int    `json:"steamPort"`
 		ProfileName       string `json:"profileName"`
 		ServerBinary      string `json:"serverBinary"`
-		LocalModsRoot     string `json:"localModsRoot"`
 		ExtraLaunchParams string `json:"extraLaunchParams"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -266,8 +265,7 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modsetChanged := !modsetIDsEqual(existing.ModsetID, body.ModsetID)
-	rootChanged := strings.TrimSpace(existing.LocalModsRoot) != strings.TrimSpace(body.LocalModsRoot)
-	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.LocalModsRoot, body.ExtraLaunchParams); err != nil {
+	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.ExtraLaunchParams); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update server")
 		return
 	}
@@ -277,11 +275,11 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[SERVER] failed to seed mods from modset: %v", err)
 			}
 		} else {
-			// Clear workshop/custom assignments but keep local_root rows.
+			// Clear workshop assignments but keep path-based custom mods.
 			existingMods, _ := database.GetServerMods(id)
 			var preserved []database.ServerMod
 			for _, m := range existingMods {
-				if m.Source == database.ServerModSourceLocalRoot {
+				if m.ModID == nil && m.CustomPath != "" {
 					preserved = append(preserved, m)
 				}
 			}
@@ -291,13 +289,6 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := server.ProvisionServer(id); err != nil {
 			log.Printf("[SERVER] provision after modset update: %v", err)
-		}
-	} else if rootChanged {
-		if err := server.SyncLocalModsRoot(id, true); err != nil {
-			log.Printf("[SERVER] local mods sync after root change: %v", err)
-		}
-		if err := server.ProvisionServer(id); err != nil {
-			log.Printf("[SERVER] provision after local mods root change: %v", err)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -501,11 +492,14 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 			enabled = *item.Enabled
 		}
 		source := item.Source
-		if source == "" && item.ModID == nil && item.CustomPath != "" {
-			source = database.ServerModSourceCustom
+		if source == "" || source == "local_root" {
+			if item.ModID == nil && item.CustomPath != "" {
+				source = database.ServerModSourceCustom
+			} else {
+				source = ""
+			}
 		}
-		// Skip path validation for disabled or auto-managed local_root rows.
-		if item.CustomPath != "" && enabled && source != database.ServerModSourceLocalRoot {
+		if item.CustomPath != "" && enabled {
 			if err := server.ValidateCustomModPath(item.CustomPath); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -532,24 +526,28 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func SyncLocalModsHandler(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
+func DiscoverLocalModsHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	folders, err := utils.ListLocalModFolders(body.Path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid server id")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := database.GetServer(id); err != nil {
-		writeError(w, http.StatusNotFound, "server not found")
-		return
+	type item struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
 	}
-	if err := server.SyncLocalModsRoot(id, true); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to sync local mods: "+err.Error())
-		return
+	out := make([]item, 0, len(folders))
+	for _, f := range folders {
+		out = append(out, item{Name: f.Name, Path: f.Path})
 	}
-	if err := server.ProvisionServer(id); err != nil {
-		log.Printf("[SERVER] provision after local mods sync: %v", err)
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"mods": out})
 }
 
 // --- Server keys ---

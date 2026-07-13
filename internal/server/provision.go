@@ -59,11 +59,6 @@ func ProvisionServer(serverID int) error {
 		}
 	}
 
-	// Refresh local mods mirror + DB rows when the source root changed.
-	if err := SyncLocalModsRoot(serverID, false); err != nil {
-		return err
-	}
-
 	// Symlink branch game files into instance (from steamapps/common/... when applicable)
 	gameDir := BranchGameDir(branch.InstallPath)
 	entries, err := os.ReadDir(gameDir)
@@ -189,14 +184,12 @@ func provisionKeys(instanceDir string, serverID int) error {
 				}
 			}
 		} else if sm.CustomPath != "" {
-			if sm.Source == database.ServerModSourceLocalRoot {
-				mirror := utils.LocalModsMirrorPath(srv.Slug, sm.CustomPath)
-				if _, err := os.Stat(mirror); err == nil {
-					modPaths = append(modPaths, mirror)
-					continue
-				}
+			mirror := utils.LocalModsMirrorPath(srv.Slug, sm.CustomPath)
+			if _, err := os.Stat(mirror); err == nil {
+				modPaths = append(modPaths, mirror)
+			} else {
+				modPaths = append(modPaths, sm.CustomPath)
 			}
-			modPaths = append(modPaths, sm.CustomPath)
 		}
 	}
 

@@ -2,14 +2,11 @@ package utils
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
-
-const localModsStampFile = ".sync-stamp"
 
 // LocalModFolder is a discovered mod directory under a local mods root.
 type LocalModFolder struct {
@@ -49,7 +46,6 @@ func LooksLikeArmaMod(path string) bool {
 	if _, err := os.Stat(filepath.Join(path, "mod.cpp")); err == nil {
 		return true
 	}
-	// Case-insensitive mod.cpp
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return false
@@ -66,7 +62,7 @@ func LooksLikeArmaMod(path string) bool {
 func ListLocalModFolders(root string) ([]LocalModFolder, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
-		return nil, nil
+		return nil, fmt.Errorf("path is empty")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -77,7 +73,7 @@ func ListLocalModFolders(root string) ([]LocalModFolder, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("local mods root is not a directory: %s", abs)
+		return nil, fmt.Errorf("path is not a directory: %s", abs)
 	}
 
 	entries, err := os.ReadDir(abs)
@@ -149,83 +145,4 @@ func SyncModMirror(src, destDir string) error {
 		return fmt.Errorf("failed to sync mod mirror %s -> %s: %w", src, destDir, err)
 	}
 	return nil
-}
-
-func localModsStampPath(slug string) string {
-	return filepath.Join(LocalModsDir(slug), localModsStampFile)
-}
-
-// BuildLocalModsStamp returns a deterministic stamp for the discovered folders.
-func BuildLocalModsStamp(folders []LocalModFolder) string {
-	lines := make([]string, 0, len(folders))
-	for _, f := range folders {
-		info, err := os.Stat(f.Path)
-		mtime := int64(0)
-		if err == nil {
-			mtime = info.ModTime().Unix()
-		}
-		lines = append(lines, fmt.Sprintf("%s|%d", strings.ToLower(f.Name), mtime))
-	}
-	sort.Strings(lines)
-	return strings.Join(lines, "\n")
-}
-
-// LocalModsChanged reports whether the source root differs from the last sync stamp.
-func LocalModsChanged(slug, root string) bool {
-	folders, err := ListLocalModFolders(root)
-	if err != nil {
-		return true
-	}
-	want := BuildLocalModsStamp(folders)
-	data, err := os.ReadFile(localModsStampPath(slug))
-	if err != nil {
-		return true
-	}
-	return strings.TrimSpace(string(data)) != want
-}
-
-// SyncServerLocalMods mirrors discovered mods into servers/<slug>/localmods and
-// removes stale mirror directories. Writes a sync stamp. Does not touch the DB.
-func SyncServerLocalMods(slug, root string) ([]LocalModFolder, error) {
-	folders, err := ListLocalModFolders(root)
-	if err != nil {
-		return nil, err
-	}
-	mirrorRoot := LocalModsDir(slug)
-	if err := os.MkdirAll(mirrorRoot, 0755); err != nil {
-		return nil, err
-	}
-
-	wanted := make(map[string]struct{}, len(folders))
-	for _, f := range folders {
-		key := strings.ToLower(f.Name)
-		wanted[key] = struct{}{}
-		dest := filepath.Join(mirrorRoot, key)
-		log.Printf("[LOCALMODS] syncing %s -> %s", f.Path, dest)
-		if err := SyncModMirror(f.Path, dest); err != nil {
-			return nil, err
-		}
-	}
-
-	entries, err := os.ReadDir(mirrorRoot)
-	if err != nil {
-		return nil, err
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if _, ok := wanted[name]; ok {
-			continue
-		}
-		log.Printf("[LOCALMODS] removing stale mirror %s", name)
-		_ = os.RemoveAll(filepath.Join(mirrorRoot, name))
-	}
-
-	stamp := BuildLocalModsStamp(folders)
-	if err := os.WriteFile(localModsStampPath(slug), []byte(stamp+"\n"), 0644); err != nil {
-		return nil, err
-	}
-	return folders, nil
 }

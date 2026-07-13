@@ -189,7 +189,7 @@ export function ServerDetail() {
       </div>
 
       {tab === "overview" && <OverviewTab serverId={serverId} srv={srv} />}
-      {tab === "mods" && <ModsTab serverId={serverId} srv={srv} />}
+      {tab === "mods" && <ModsTab serverId={serverId} />}
       {tab === "keys" && <KeysTab serverId={serverId} />}
       {tab === "config" && <ConfigTab serverId={serverId} serverStatus={status} />}
       {tab === "logs" && <LogsTab serverId={serverId} isRunning={isRunning} />}
@@ -211,7 +211,6 @@ function OverviewTab({
     steamPort: number;
     profileName: string;
     serverBinary: string;
-    localModsRoot: string;
     extraLaunchParams: string;
   };
 }) {
@@ -257,7 +256,6 @@ function OverviewTab({
         steamPort: parseInt(steamPort, 10),
         profileName,
         serverBinary,
-        localModsRoot: srv.localModsRoot ?? "",
         extraLaunchParams: extra,
       }),
     onSuccess: () => {
@@ -404,23 +402,7 @@ function OverviewTab({
   );
 }
 
-function ModsTab({
-  serverId,
-  srv,
-}: {
-  serverId: number;
-  srv: {
-    name: string;
-    branchId: number;
-    modsetId?: number;
-    gamePort: number;
-    steamPort: number;
-    profileName: string;
-    serverBinary: string;
-    localModsRoot: string;
-    extraLaunchParams: string;
-  };
-}) {
+function ModsTab({ serverId }: { serverId: number }) {
   const queryClient = useQueryClient();
   const serverMods = useQuery({
     queryKey: ["serverMods", serverId],
@@ -430,15 +412,12 @@ function ModsTab({
 
   const [mods, setMods] = useState<ServerMod[]>([]);
   const [customPath, setCustomPath] = useState("");
-  const [localModsRoot, setLocalModsRoot] = useState(srv.localModsRoot ?? "");
+  const [folderPath, setFolderPath] = useState("");
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (serverMods.data) setMods(serverMods.data);
   }, [serverMods.data]);
-
-  useEffect(() => {
-    setLocalModsRoot(srv.localModsRoot ?? "");
-  }, [srv.localModsRoot]);
 
   const save = useMutation({
     mutationFn: () => api.putServerMods(serverId, mods),
@@ -449,34 +428,41 @@ function ModsTab({
     },
   });
 
-  const applyLocalRoot = useMutation({
-    mutationFn: async () => {
-      const nextRoot = localModsRoot.trim();
-      const prevRoot = (srv.localModsRoot ?? "").trim();
-      if (nextRoot !== prevRoot) {
-        // Backend syncs + provisions when the root path changes.
-        await api.updateServer(serverId, {
-          name: srv.name,
-          branchId: srv.branchId,
-          modsetId: srv.modsetId ?? null,
-          gamePort: srv.gamePort,
-          steamPort: srv.steamPort,
-          profileName: srv.profileName,
-          serverBinary: srv.serverBinary ?? "",
-          localModsRoot: nextRoot,
-          extraLaunchParams: srv.extraLaunchParams ?? "",
-        });
-        return;
-      }
-      if (nextRoot) {
-        await api.syncLocalMods(serverId);
-      }
+  const scanFolder = useMutation({
+    mutationFn: () => api.discoverLocalMods(folderPath.trim()),
+    onSuccess: (data) => {
+      const found = data.mods ?? [];
+      setMods((prev) => {
+        const existing = new Set(
+          prev
+            .filter((m) => m.customPath)
+            .map((m) => m.customPath!.replace(/[/\\]+$/, "").toLowerCase()),
+        );
+        const added: ServerMod[] = [];
+        for (const f of found) {
+          const key = f.path.replace(/[/\\]+$/, "").toLowerCase();
+          if (existing.has(key)) continue;
+          existing.add(key);
+          added.push({
+            customPath: f.path,
+            label: f.name,
+            isServerMod: false,
+            enabled: true,
+            source: "custom",
+          });
+        }
+        setScanMsg(
+          added.length
+            ? `Added ${added.length} mod(s). Save & provision to apply.`
+            : found.length
+              ? "All discovered mods are already in the list."
+              : "No mod folders found in that path.",
+        );
+        return added.length ? [...prev, ...added] : prev;
+      });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
-      queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
-      queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
-      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+    onError: (err: Error) => {
+      setScanMsg(err.message || "Failed to scan folder");
     },
   });
 
@@ -505,43 +491,46 @@ function ModsTab({
   };
 
   const sourceLabel = (m: ServerMod) => {
-    if (m.source === "local_root") return `Local · ${m.customPath ?? ""}`;
     if (m.modId) return `Workshop #${m.modId}`;
     return m.customPath ?? "Custom";
   };
-
-  const rootDirty = localModsRoot.trim() !== (srv.localModsRoot ?? "").trim();
 
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Local mods folder</CardTitle>
+          <CardTitle className="text-base">Add from folder</CardTitle>
           <CardDescription>
-            Point at a folder of Arma mods (each subfolder with addons/ or mod.cpp). Ideal
-            discovers them, mirrors them under this server, and lists them below.
+            Scan a directory for Arma mod subfolders and add them to the list. The folder path
+            is not saved — only the individual mods you keep.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex flex-1 flex-col gap-1">
-            <Label>Root path</Label>
-            <Input
-              value={localModsRoot}
-              onChange={(e) => setLocalModsRoot(e.target.value)}
-              placeholder="/path/to/mods-root"
-            />
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex flex-1 flex-col gap-1">
+              <Label>Folder path</Label>
+              <Input
+                value={folderPath}
+                onChange={(e) => {
+                  setFolderPath(e.target.value);
+                  setScanMsg(null);
+                }}
+                placeholder="/path/to/mods-root"
+              />
+            </div>
+            <Button
+              onClick={() => scanFolder.mutate()}
+              disabled={scanFolder.isPending || !folderPath.trim()}
+            >
+              {scanFolder.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Scan & add
+            </Button>
           </div>
-          <Button
-            onClick={() => applyLocalRoot.mutate()}
-            disabled={applyLocalRoot.isPending || (!rootDirty && !localModsRoot.trim())}
-          >
-            {applyLocalRoot.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-            {rootDirty ? "Save & scan" : "Rescan"}
-          </Button>
+          {scanMsg && <p className="text-xs text-muted-foreground">{scanMsg}</p>}
         </CardContent>
       </Card>
 
@@ -549,7 +538,8 @@ function ModsTab({
         <CardHeader>
           <CardTitle className="text-base">Add mods</CardTitle>
           <CardDescription>
-            Workshop downloads and one-off custom paths outside the local folder above.
+            Workshop downloads or a single custom mod path. Custom paths are mirrored with
+            lowercase names for Linux.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -645,17 +635,13 @@ function ModsTab({
                       />
                     </TableCell>
                     <TableCell>
-                      {m.source === "local_root" ? (
-                        <span className="text-xs text-muted-foreground">Disable to skip</span>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setMods((prev) => prev.filter((_, j) => j !== i))}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setMods((prev) => prev.filter((_, j) => j !== i))}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}

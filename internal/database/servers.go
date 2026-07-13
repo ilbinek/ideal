@@ -17,8 +17,7 @@ const (
 	ServerStatusStopping = "stopping"
 	ServerStatusUnknown  = "unknown"
 
-	ServerModSourceCustom    = "custom"
-	ServerModSourceLocalRoot = "local_root"
+	ServerModSourceCustom = "custom"
 )
 
 type ArmaBranch struct {
@@ -40,7 +39,6 @@ type Server struct {
 	SteamPort         int       `json:"steamPort"`
 	ProfileName       string    `json:"profileName"`
 	ServerBinary      string    `json:"serverBinary"`
-	LocalModsRoot     string    `json:"localModsRoot"`
 	ExtraLaunchParams string    `json:"extraLaunchParams"`
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
@@ -316,7 +314,7 @@ func SetBranchInstalled(id int, installed bool) error {
 func GetServers() ([]Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(server_binary, ''), COALESCE(local_mods_root, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers ORDER BY name`)
 	if err != nil {
@@ -329,7 +327,7 @@ func GetServers() ([]Server, error) {
 func GetServer(id int) (*Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(server_binary, ''), COALESCE(local_mods_root, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers WHERE id = ?`, id)
 	if err != nil {
@@ -353,7 +351,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 		var modsetID sql.NullInt64
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
-			&s.ProfileName, &s.ServerBinary, &s.LocalModsRoot, &s.ExtraLaunchParams,
+			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams,
 			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -367,15 +365,15 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 	return servers, rows.Err()
 }
 
-func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, localModsRoot string) (int64, error) {
+func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary string) (int64, error) {
 	if profileName == "" {
 		profileName = "Server"
 	}
 	result, err := db.Exec(`
-		INSERT INTO servers (name, slug, branch_id, modset_id, game_port, steam_port, profile_name, server_binary, local_mods_root)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO servers (name, slug, branch_id, modset_id, game_port, steam_port, profile_name, server_binary)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		name, slug, branchID, modsetID, gamePort, steamPort, profileName,
-		strings.TrimSpace(serverBinary), strings.TrimSpace(localModsRoot),
+		strings.TrimSpace(serverBinary),
 	)
 	if err != nil {
 		return 0, err
@@ -383,14 +381,14 @@ func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, stea
 	return result.LastInsertId()
 }
 
-func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, localModsRoot, extraLaunchParams string) error {
+func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, extraLaunchParams string) error {
 	_, err := db.Exec(`
 		UPDATE servers SET name = ?, branch_id = ?, modset_id = ?, game_port = ?, steam_port = ?,
-			profile_name = ?, server_binary = ?, local_mods_root = ?, extra_launch_params = ?,
+			profile_name = ?, server_binary = ?, extra_launch_params = ?,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`,
 		name, branchID, modsetID, gamePort, steamPort, profileName,
-		strings.TrimSpace(serverBinary), strings.TrimSpace(localModsRoot), extraLaunchParams, id,
+		strings.TrimSpace(serverBinary), extraLaunchParams, id,
 	)
 	return err
 }
@@ -430,8 +428,10 @@ func GetServerMods(serverID int) ([]ServerMod, error) {
 			v := int(modID.Int64)
 			m.ModID = &v
 		}
-		if m.Source == "" && m.ModID == nil && m.CustomPath != "" {
-			m.Source = ServerModSourceCustom
+		if m.Source == "" || m.Source == "local_root" {
+			if m.ModID == nil && m.CustomPath != "" {
+				m.Source = ServerModSourceCustom
+			}
 		}
 		mods = append(mods, m)
 	}
@@ -454,8 +454,12 @@ func ReplaceServerMods(serverID int, mods []ServerMod) error {
 			modID = *m.ModID
 		}
 		source := m.Source
-		if source == "" && m.ModID == nil && m.CustomPath != "" {
-			source = ServerModSourceCustom
+		if source == "" || source == "local_root" {
+			if m.ModID == nil && m.CustomPath != "" {
+				source = ServerModSourceCustom
+			} else {
+				source = ""
+			}
 		}
 		enabled := 0
 		if m.Enabled {
@@ -473,52 +477,6 @@ func ReplaceServerMods(serverID int, mods []ServerMod) error {
 	return tx.Commit()
 }
 
-// ReconcileLocalRootMods upserts local_root mod rows from discovered folders.
-// Preserves enabled/is_server_mod for existing matches (by lowercase basename).
-func ReconcileLocalRootMods(serverID int, folders []utils.LocalModFolder) error {
-	existing, err := GetServerMods(serverID)
-	if err != nil {
-		return err
-	}
-
-	byKey := make(map[string]ServerMod)
-	var kept []ServerMod
-	for _, m := range existing {
-		if m.Source != ServerModSourceLocalRoot {
-			kept = append(kept, m)
-			continue
-		}
-		key := strings.ToLower(filepath.Base(m.CustomPath))
-		if key == "" {
-			key = strings.ToLower(m.Label)
-		}
-		byKey[key] = m
-	}
-
-	maxOrder := len(kept)
-	for _, f := range folders {
-		key := strings.ToLower(f.Name)
-		if prev, ok := byKey[key]; ok {
-			prev.CustomPath = f.Path
-			prev.Label = f.Name
-			prev.Source = ServerModSourceLocalRoot
-			kept = append(kept, prev)
-			continue
-		}
-		kept = append(kept, ServerMod{
-			CustomPath:  f.Path,
-			Label:       f.Name,
-			IsServerMod: false,
-			Enabled:     true,
-			Source:      ServerModSourceLocalRoot,
-			SortOrder:   maxOrder,
-		})
-		maxOrder++
-	}
-
-	return ReplaceServerMods(serverID, kept)
-}
-
 func SeedServerModsFromModset(serverID, modsetID int) error {
 	existing, err := GetServerMods(serverID)
 	if err != nil {
@@ -526,7 +484,8 @@ func SeedServerModsFromModset(serverID, modsetID int) error {
 	}
 	var preserved []ServerMod
 	for _, m := range existing {
-		if m.Source == ServerModSourceLocalRoot {
+		// Keep manually added path-based mods when swapping modsets.
+		if m.ModID == nil && m.CustomPath != "" {
 			preserved = append(preserved, m)
 		}
 	}
@@ -623,7 +582,7 @@ func GetServerKey(id int) (*ServerKey, error) {
 func GetServersUsingPort(gamePort, steamPort int, excludeID int) ([]Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(server_binary, ''), COALESCE(local_mods_root, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers WHERE id != ? AND (game_port = ? OR steam_port = ? OR game_port = ? OR steam_port = ?)`,
 		excludeID, gamePort, steamPort, steamPort, gamePort,

@@ -126,7 +126,7 @@ func SanitizeModLabel(label string) string {
 
 // ModLinkName returns the symlink folder name and source path for a server mod entry.
 // Managed mods symlink from the lowercased addons mirror, not the raw mods download folder.
-// Local-root mods symlink from servers/<slug>/localmods/<name>/.
+// Custom/local path mods symlink from servers/<slug>/localmods/<name>/.
 func ModLinkName(slug string, sm database.ServerMod) (linkName, srcPath string, ok bool) {
 	if !sm.Enabled {
 		return "", "", false
@@ -152,21 +152,11 @@ func ModLinkName(slug string, sm database.ServerMod) (linkName, srcPath string, 
 		if err := ValidateCustomModPath(sm.CustomPath); err != nil {
 			return "", "", false
 		}
-		if sm.Source == database.ServerModSourceLocalRoot {
-			linkName = strings.ToLower(filepath.Base(sm.CustomPath))
-			srcPath = utils.LocalModsMirrorPath(slug, sm.CustomPath)
-			if _, err := os.Stat(srcPath); err != nil {
-				return "", "", false
-			}
-			return linkName, srcPath, true
-		}
-		// Manual custom path: still mirror into localmods for lowercase Linux safety.
+		// All custom/local paths get a lowercased file-symlink mirror (Linux casing).
 		linkName = strings.ToLower(filepath.Base(sm.CustomPath))
 		srcPath = utils.LocalModsMirrorPath(slug, sm.CustomPath)
-		if _, err := os.Stat(srcPath); err != nil {
-			if syncErr := utils.SyncModMirror(sm.CustomPath, srcPath); syncErr != nil {
-				return "", "", false
-			}
+		if syncErr := utils.SyncModMirror(sm.CustomPath, srcPath); syncErr != nil {
+			return "", "", false
 		}
 		return linkName, srcPath, true
 	}
