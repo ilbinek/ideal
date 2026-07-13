@@ -13,7 +13,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
 import { formatDate } from "@/lib/utils";
@@ -36,6 +36,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useToast } from "@/components/ui/toast";
 import type { HeadlessClientSnapshot, ServerMod, ServerStatus } from "@/lib/types";
 
 type Tab = "overview" | "mods" | "keys" | "config" | "logs" | "headless" | "missions";
@@ -1194,7 +1195,12 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   );
 }
 
+function isPboFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".pbo");
+}
+
 function MissionsTab({ serverId }: { serverId: number }) {
+  const toast = useToast();
   const queryClient = useQueryClient();
   const missions = useQuery({
     queryKey: ["missions", serverId],
@@ -1204,8 +1210,38 @@ function MissionsTab({ serverId }: { serverId: number }) {
   const [drag, setDrag] = useState(false);
 
   const upload = useMutation({
-    mutationFn: (file: File) => api.uploadMission(serverId, file),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["missions", serverId] }),
+    mutationFn: async (files: File[]) => {
+      let ok = 0;
+      const failed: string[] = [];
+      for (const file of files) {
+        try {
+          await api.uploadMission(serverId, file);
+          ok++;
+        } catch (e) {
+          failed.push(
+            `${file.name}${e instanceof ApiError ? `: ${e.message}` : ""}`,
+          );
+        }
+      }
+      return { ok, failed };
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["missions", serverId] });
+      if (res.failed.length === 0) {
+        toast.success(
+          res.ok === 1 ? "Mission uploaded" : `Uploaded ${res.ok} missions`,
+        );
+      } else if (res.ok === 0) {
+        toast.error("Upload failed", res.failed.join("; "));
+      } else {
+        toast.error(
+          `Uploaded ${res.ok}, failed ${res.failed.length}`,
+          res.failed.join("; "),
+        );
+      }
+    },
+    onError: (e) =>
+      toast.error("Upload failed", e instanceof ApiError ? e.message : undefined),
   });
 
   const remove = useMutation({
@@ -1213,11 +1249,19 @@ function MissionsTab({ serverId }: { serverId: number }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["missions", serverId] }),
   });
 
+  const uploadPbos = (list: FileList | File[]) => {
+    const files = Array.from(list).filter(isPboFile);
+    if (files.length === 0) {
+      toast.error("No .pbo files selected");
+      return;
+    }
+    upload.mutate(files);
+  };
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDrag(false);
-    const file = e.dataTransfer.files[0];
-    if (file?.name.toLowerCase().endsWith(".pbo")) upload.mutate(file);
+    uploadPbos(e.dataTransfer.files);
   };
 
   return (
@@ -1239,15 +1283,27 @@ function MissionsTab({ serverId }: { serverId: number }) {
           ref={fileRef}
           type="file"
           accept=".pbo"
+          multiple
           className="hidden"
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) upload.mutate(f);
+            if (e.target.files?.length) uploadPbos(e.target.files);
             e.target.value = "";
           }}
         />
-        <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
-          Choose file
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={upload.isPending}
+          onClick={() => fileRef.current?.click()}
+        >
+          {upload.isPending ? (
+            <>
+              <Loader2 className="size-4 animate-spin" />
+              Uploading…
+            </>
+          ) : (
+            "Choose files"
+          )}
         </Button>
       </div>
 
