@@ -116,6 +116,9 @@ func collectLogFiles(dir string, recursive bool, seen map[string]struct{}, entri
 }
 
 func findLogPath(slug, filename string) (string, error) {
+	if err := validateLogFilename(filename); err != nil {
+		return "", err
+	}
 	instanceDir := InstanceDir(slug)
 	candidates := []string{
 		filepath.Join(instanceDir, "logs", filename),
@@ -144,13 +147,59 @@ func findLogPath(slug, filename string) (string, error) {
 	return "", fmt.Errorf("log file not found")
 }
 
+func validateLogFilename(filename string) error {
+	if filename == "" || strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		return fmt.Errorf("invalid filename")
+	}
+	return nil
+}
+
+// DeleteLog removes a log file from the server instance.
+// Active session/RPT logs for a running Ideal-managed process cannot be deleted.
+func DeleteLog(serverID int, slug, filename string) error {
+	if err := validateLogFilename(filename); err != nil {
+		return err
+	}
+	if active := Default.ActiveSessionLogPath(serverID); active != "" && filepath.Base(active) == filename {
+		return fmt.Errorf("cannot delete the active session log while the server is running")
+	}
+	if active := Default.ActiveRPTPath(serverID); active != "" && filepath.Base(active) == filename {
+		return fmt.Errorf("cannot delete the active RPT while the server is running")
+	}
+
+	logPath, err := findLogPath(slug, filename)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(logPath); err != nil {
+		return fmt.Errorf("failed to delete log: %w", err)
+	}
+	return nil
+}
+
+// OpenLogForDownload opens a log file for streaming to the client.
+func OpenLogForDownload(slug, filename string) (*os.File, string, error) {
+	if err := validateLogFilename(filename); err != nil {
+		return nil, "", err
+	}
+	logPath, err := findLogPath(slug, filename)
+	if err != nil {
+		return nil, "", err
+	}
+	f, err := openLogFile(logPath)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, filepath.Base(logPath), nil
+}
+
 // ReadLog reads a log file with optional offset and limit.
 // When offset is 0 and the file is larger than the read window, the tail of the
 // file is returned (server logs are most useful from the end) and the read is
 // aligned to the next newline so content does not start mid-line.
 func ReadLog(slug, filename string, offset, limit int64) (content string, totalSize int64, err error) {
-	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
-		return "", 0, fmt.Errorf("invalid filename")
+	if err := validateLogFilename(filename); err != nil {
+		return "", 0, err
 	}
 
 	logPath, err := findLogPath(slug, filename)

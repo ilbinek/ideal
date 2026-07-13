@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Copy,
+  Download,
   Loader2,
   Play,
   RefreshCw,
@@ -944,10 +945,12 @@ function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus:
 }
 
 function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean }) {
+  const queryClient = useQueryClient();
   const { text, activePath } = useServerLogs(serverId, isRunning);
   const logRef = useRef<HTMLPreElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [view, setView] = useState<"live" | "file">(isRunning ? "live" : "file");
+  const [logError, setLogError] = useState("");
   const logs = useQuery({
     queryKey: ["serverLogs", serverId],
     queryFn: () => api.listServerLogs(serverId),
@@ -976,6 +979,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
 
   const loadArchived = useCallback(
     async (name: string) => {
+      setLogError("");
       setSelected(name);
       setView("file");
       const data = await api.getServerLog(serverId, name, 0);
@@ -983,6 +987,46 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
     },
     [serverId],
   );
+
+  const remove = useMutation({
+    mutationFn: (name: string) => api.deleteServerLog(serverId, name),
+    onSuccess: (_data, name) => {
+      setLogError("");
+      if (selected === name) {
+        setSelected(null);
+        setArchived("");
+        setView(isRunning ? "live" : "file");
+      }
+      queryClient.invalidateQueries({ queryKey: ["serverLogs", serverId] });
+    },
+    onError: (err) => {
+      setLogError(err instanceof Error ? err.message : "Failed to delete log");
+    },
+  });
+
+  const download = useMutation({
+    mutationFn: async (name: string | null) => {
+      if (name) {
+        await api.downloadServerLog(serverId, name);
+        return;
+      }
+      // Live buffer download
+      const blob = new Blob([text || ""], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `live-${serverId}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+    onError: (err) => {
+      setLogError(err instanceof Error ? err.message : "Failed to download log");
+    },
+  });
+
+  const activeSessionName = activePath ? activePath.split(/[/\\]/).pop() : "";
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">
@@ -994,6 +1038,11 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
           </CardDescription>
         </CardHeader>
         <CardContent className="max-h-96 overflow-y-auto">
+          {logError && (
+            <p className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+              {logError}
+            </p>
+          )}
           <ul className="text-sm">
             {isRunning && (
               <li>
@@ -1015,22 +1064,62 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
                 </button>
               </li>
             )}
-            {(logs.data ?? []).map((l) => (
-              <li key={l.name}>
-                <button
-                  type="button"
-                  className={`w-full rounded px-2 py-1 text-left hover:bg-accent ${
+            {(logs.data ?? []).map((l) => {
+              const isActiveLive =
+                isRunning &&
+                (l.name === activeSessionName ||
+                  (activePath && activePath.endsWith(l.name)));
+              return (
+                <li
+                  key={l.name}
+                  className={`group flex items-start gap-1 rounded ${
                     !showingLive && selected === l.name ? "bg-accent" : ""
                   }`}
-                  onClick={() => loadArchived(l.name)}
                 >
-                  <div className="font-medium">{l.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatDate(l.modTime)} · {(l.size / 1024).toFixed(1)} KB
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 px-2 py-1 text-left hover:bg-accent/80"
+                    onClick={() => loadArchived(l.name)}
+                  >
+                    <div className="truncate font-medium">{l.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatDate(l.modTime)} · {(l.size / 1024).toFixed(1)} KB
+                      {isActiveLive ? " · active" : ""}
+                    </div>
+                  </button>
+                  <div className="flex shrink-0 gap-0.5 py-1 pr-1 opacity-70 group-hover:opacity-100">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="size-7 p-0"
+                      title="Download"
+                      disabled={download.isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLogError("");
+                        download.mutate(l.name);
+                      }}
+                    >
+                      <Download className="size-3.5" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="size-7 p-0"
+                      title={isActiveLive ? "Stop the server to delete the active log" : "Delete"}
+                      disabled={remove.isPending || !!isActiveLive}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!confirm(`Delete ${l.name}?`)) return;
+                        remove.mutate(l.name);
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
                   </div>
-                </button>
-              </li>
-            ))}
+                </li>
+              );
+            })}
             {!logs.data?.length && (
               <li className="text-muted-foreground">No logs yet.</li>
             )}
@@ -1040,7 +1129,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
 
       <Card className="lg:col-span-2">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             <CardTitle className="text-base">
               {showingLive ? "Live tail" : selected ? selected : "Log viewer"}
             </CardTitle>
@@ -1050,14 +1139,42 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
               </CardDescription>
             )}
           </div>
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-            />
-            Auto-scroll
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={autoScroll}
+                onChange={(e) => setAutoScroll(e.target.checked)}
+              />
+              Auto-scroll
+            </label>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={download.isPending || (!showingLive && !selected)}
+              onClick={() => {
+                setLogError("");
+                download.mutate(showingLive ? null : selected);
+              }}
+            >
+              <Download className="size-3.5" />
+              {showingLive ? "Save live buffer" : "Download"}
+            </Button>
+            {!showingLive && selected && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={remove.isPending}
+                onClick={() => {
+                  if (!confirm(`Delete ${selected}?`)) return;
+                  remove.mutate(selected);
+                }}
+              >
+                <Trash2 className="size-3.5" />
+                Delete
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           <pre

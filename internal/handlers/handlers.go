@@ -96,7 +96,9 @@ func APIHandler() http.Handler {
 	// Server logs
 	mux.HandleFunc("GET /api/servers/{id}/logs", apiAuth(ListServerLogsHandler))
 	mux.HandleFunc("GET /api/servers/{id}/logs/stream", apiAuth(ServerLogStreamHandler))
+	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}/download", apiAuth(DownloadServerLogHandler))
 	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}", apiAuth(GetServerLogHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/logs/{filename}", apiAuth(DeleteServerLogHandler))
 
 	// Missions
 	mux.HandleFunc("GET /api/servers/{id}/missions", apiAuth(ListMissionsHandler))
