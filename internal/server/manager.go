@@ -432,6 +432,7 @@ func (m *Manager) Restart(serverID int) error {
 }
 
 // ActiveRPTPath returns the active RPT path for a running server.
+// Falls back to the last known DB path (useful for log streaming after Ideal restart).
 func (m *Manager) ActiveRPTPath(serverID int) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -443,6 +444,24 @@ func (m *Manager) ActiveRPTPath(serverID int) string {
 		return srv.ActiveRPT
 	}
 	return ""
+}
+
+// ActiveLogBasenames returns session/RPT filenames only when Ideal is currently
+// tracking a live process for this server. Empty when stopped.
+func (m *Manager) ActiveLogBasenames(serverID int) (session, rpt string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[serverID]
+	if !ok {
+		return "", ""
+	}
+	if inst.sessionLogPath != "" {
+		session = filepath.Base(inst.sessionLogPath)
+	}
+	if inst.rptPath != "" {
+		rpt = filepath.Base(inst.rptPath)
+	}
+	return session, rpt
 }
 
 // ReadProcessLog returns new stdout/stderr captured since offset.

@@ -5,8 +5,13 @@ export function useServerLogs(serverId: number, enabled: boolean) {
   const [activePath, setActivePath] = React.useState("");
 
   React.useEffect(() => {
-    if (!enabled || !serverId) return;
+    if (!enabled || !serverId) {
+      setLines([]);
+      setActivePath("");
+      return;
+    }
     setLines([]);
+    setActivePath("");
     const source = new EventSource(`/api/servers/${serverId}/logs/stream`);
     source.onmessage = (e) => {
       try {

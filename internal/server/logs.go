@@ -155,15 +155,16 @@ func validateLogFilename(filename string) error {
 }
 
 // DeleteLog removes a log file from the server instance.
-// Active session/RPT logs for a running Ideal-managed process cannot be deleted.
+// Active session/RPT logs for a currently tracked running process cannot be deleted.
 func DeleteLog(serverID int, slug, filename string) error {
 	if err := validateLogFilename(filename); err != nil {
 		return err
 	}
-	if active := Default.ActiveSessionLogPath(serverID); active != "" && filepath.Base(active) == filename {
+	sessionName, rptName := Default.ActiveLogBasenames(serverID)
+	if sessionName != "" && sessionName == filename {
 		return fmt.Errorf("cannot delete the active session log while the server is running")
 	}
-	if active := Default.ActiveRPTPath(serverID); active != "" && filepath.Base(active) == filename {
+	if rptName != "" && rptName == filename {
 		return fmt.Errorf("cannot delete the active RPT while the server is running")
 	}
 
