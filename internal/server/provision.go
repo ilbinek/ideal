@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/utils"
@@ -77,6 +78,11 @@ func ProvisionServer(serverID int) error {
 		}
 	}
 
+	// Overlay enabled Creator DLC packs from the creatordlc branch (or this branch).
+	if err := provisionCdlcs(instanceDir, gameDir, srv.EnabledCdlcs); err != nil {
+		return err
+	}
+
 	// Rebuild mod symlinks
 	if err := provisionMods(instanceDir, serverID); err != nil {
 		return err
@@ -84,6 +90,25 @@ func ProvisionServer(serverID int) error {
 
 	// Regenerate keys
 	return provisionKeys(instanceDir, serverID)
+}
+
+func provisionCdlcs(instanceDir, fallbackGameDir string, enabled []string) error {
+	for _, code := range enabled {
+		code = strings.ToLower(strings.TrimSpace(code))
+		if code == "" {
+			continue
+		}
+		src, ok := ResolveCdlcPath(code, fallbackGameDir)
+		if !ok {
+			log.Printf("[PROVISION] skipping cDLC %s: not found on disk", code)
+			continue
+		}
+		dst := filepath.Join(instanceDir, code)
+		if err := CreateSymlink(src, dst); err != nil {
+			return fmt.Errorf("failed to symlink cDLC %s: %w", code, err)
+		}
+	}
+	return nil
 }
 
 func provisionMods(instanceDir string, serverID int) error {
@@ -161,6 +186,27 @@ func provisionKeys(instanceDir string, serverID int) error {
 	branchKeysDir := filepath.Join(BranchGameDir(branch.InstallPath), "keys")
 	if err := utils.CopyBikeysFromDir(branchKeysDir, keysDir); err != nil {
 		log.Printf("[PROVISION] warning: failed to copy branch keys from %s: %v", branchKeysDir, err)
+	}
+
+	if len(srv.EnabledCdlcs) > 0 {
+		if cdlcGame := CreatorDlcGameDir(); cdlcGame != "" {
+			cdlcKeys := filepath.Join(cdlcGame, "keys")
+			if err := utils.CopyBikeysFromDir(cdlcKeys, keysDir); err != nil {
+				log.Printf("[PROVISION] warning: failed to copy Creator DLC keys from %s: %v", cdlcKeys, err)
+			}
+		}
+		fallbackGameDir := BranchGameDir(branch.InstallPath)
+		var cdlcPaths []string
+		for _, code := range srv.EnabledCdlcs {
+			if src, ok := ResolveCdlcPath(code, fallbackGameDir); ok {
+				cdlcPaths = append(cdlcPaths, src)
+			}
+		}
+		if len(cdlcPaths) > 0 {
+			if err := utils.ExtractKeys(cdlcPaths, keysDir); err != nil {
+				log.Printf("[PROVISION] warning: failed to extract cDLC keys: %v", err)
+			}
+		}
 	}
 
 	serverMods, err := database.GetServerMods(serverID)

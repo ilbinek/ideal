@@ -1,5 +1,6 @@
 import type {
   ArmaBranch,
+  CdlcCatalog,
   Downloader,
   DownloadScope,
   GameServer,
@@ -202,12 +203,14 @@ export const api = {
       profileName: string;
       serverBinary: string;
       extraLaunchParams: string;
+      enabledCdlcs: string[];
     },
   ) =>
     request<{ ok: boolean }>(`/api/servers/${id}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  getCdlcs: () => request<CdlcCatalog>("/api/cdlcs"),
   discoverLocalMods: (path: string) =>
     request<{ mods: { name: string; path: string }[] }>("/api/localmods/discover", {
       method: "POST",

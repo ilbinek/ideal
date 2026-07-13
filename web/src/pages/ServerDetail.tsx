@@ -244,6 +244,7 @@ function OverviewTab({
     profileName: string;
     serverBinary: string;
     extraLaunchParams: string;
+    enabledCdlcs?: string[];
   };
 }) {
   const queryClient = useQueryClient();
@@ -262,12 +263,17 @@ function OverviewTab({
   const [profileName, setProfileName] = useState(srv.profileName);
   const [serverBinary, setServerBinary] = useState(srv.serverBinary ?? "");
   const [extra, setExtra] = useState(srv.extraLaunchParams);
+  const [enabledCdlcs, setEnabledCdlcs] = useState<string[]>(srv.enabledCdlcs ?? []);
 
   const branchIdNum = parseInt(branchId, 10);
   const binaries = useQuery({
     queryKey: ["branchBinaries", branchIdNum],
     queryFn: () => api.getBranchBinaries(branchIdNum),
     enabled: Number.isFinite(branchIdNum) && branchIdNum > 0,
+  });
+  const cdlcs = useQuery({
+    queryKey: ["cdlcs"],
+    queryFn: () => api.getCdlcs(),
   });
 
   useEffect(() => {
@@ -277,6 +283,10 @@ function OverviewTab({
   useEffect(() => {
     setServerBinary(srv.serverBinary ?? "");
   }, [srv.serverBinary]);
+
+  useEffect(() => {
+    setEnabledCdlcs(srv.enabledCdlcs ?? []);
+  }, [srv.enabledCdlcs]);
 
   const save = useMutation({
     mutationFn: () =>
@@ -289,6 +299,7 @@ function OverviewTab({
         profileName,
         serverBinary,
         extraLaunchParams: extra,
+        enabledCdlcs,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
@@ -393,6 +404,53 @@ function OverviewTab({
           <div className="flex flex-col gap-1">
             <Label>Extra launch params</Label>
             <Input value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="-nosound" />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>Creator DLCs</Label>
+            {!cdlcs.data?.installed ? (
+              <p className="text-xs text-muted-foreground">
+                Install the{" "}
+                <Link to="/branches" className="underline underline-offset-2">
+                  Creator DLC
+                </Link>{" "}
+                branch to enable cDLC packs on this server.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {cdlcs.data.items.map((item) => {
+                  const checked = enabledCdlcs.includes(item.code);
+                  return (
+                    <label
+                      key={item.code}
+                      className={`flex items-center gap-2 text-sm ${
+                        item.available ? "cursor-pointer" : "cursor-not-allowed opacity-50"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded border-input"
+                        checked={checked}
+                        disabled={!item.available}
+                        onChange={(e) => {
+                          setEnabledCdlcs((prev) =>
+                            e.target.checked
+                              ? [...prev, item.code]
+                              : prev.filter((c) => c !== item.code),
+                          );
+                        }}
+                      />
+                      <span>
+                        {item.name}{" "}
+                        <span className="text-muted-foreground">({item.code})</span>
+                      </span>
+                    </label>
+                  );
+                })}
+                <p className="text-xs text-muted-foreground">
+                  Enabled packs are symlinked from the Creator DLC branch and prepended to -mod=.
+                </p>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>

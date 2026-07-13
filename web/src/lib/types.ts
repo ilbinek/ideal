@@ -113,12 +113,24 @@ export interface GameServer {
   profileName: string;
   serverBinary: string;
   extraLaunchParams: string;
+  enabledCdlcs: string[];
   headlessCount: number;
   status: ServerStatus;
   pid: number;
   activeRpt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CdlcInfo {
+  code: string;
+  name: string;
+  available: boolean;
+}
+
+export interface CdlcCatalog {
+  installed: boolean;
+  items: CdlcInfo[];
 }
 
 export interface ServerMod {

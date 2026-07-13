@@ -40,6 +40,7 @@ type Server struct {
 	ProfileName       string    `json:"profileName"`
 	ServerBinary      string    `json:"serverBinary"`
 	ExtraLaunchParams string    `json:"extraLaunchParams"`
+	EnabledCdlcs      []string  `json:"enabledCdlcs"`
 	HeadlessCount     int       `json:"headlessCount"`
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
@@ -128,6 +129,9 @@ func migrateServers() error {
 	if err := seedDefaultBranches(); err != nil {
 		return err
 	}
+	if err := ensureCreatorDlcBranch(); err != nil {
+		return err
+	}
 	if err := fixPerformanceBranchCode(); err != nil {
 		return err
 	}
@@ -145,6 +149,7 @@ func migrateServerColumns() error {
 		"ALTER TABLE servers ADD COLUMN server_binary TEXT DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN local_mods_root TEXT DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN headless_count INTEGER DEFAULT 0",
+		"ALTER TABLE servers ADD COLUMN enabled_cdlcs TEXT DEFAULT ''",
 		"ALTER TABLE server_mods ADD COLUMN enabled BOOLEAN DEFAULT 1",
 		"ALTER TABLE server_mods ADD COLUMN source TEXT DEFAULT ''",
 	}
@@ -210,6 +215,8 @@ func branchSlug(name, installPath string) string {
 		return "performance"
 	case "Creative Dev":
 		return "creativedev"
+	case "Creator DLC":
+		return "creatordlc"
 	default:
 		return filepath.Base(filepath.Clean(installPath))
 	}
@@ -229,6 +236,7 @@ func seedDefaultBranches() error {
 		{"Main", "", "main"},
 		{"Performance", "profiling", "performance"},
 		{"Creative Dev", "creativedev", "creativedev"},
+		{"Creator DLC", "creatordlc", "creatordlc"},
 	}
 	for _, d := range defaults {
 		path := utils.BranchInstallPath(d.slug)
@@ -241,6 +249,26 @@ func seedDefaultBranches() error {
 		}
 	}
 	return nil
+}
+
+// ensureCreatorDlcBranch inserts the Creator DLC branch for existing databases
+// that were seeded before it was a default.
+func ensureCreatorDlcBranch() error {
+	var count int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM arma_branches WHERE steam_branch = 'creatordlc' OR name = 'Creator DLC'`,
+	).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	path := utils.BranchInstallPath("creatordlc")
+	_, err := db.Exec(
+		"INSERT INTO arma_branches (name, steam_branch, install_path) VALUES (?, ?, ?)",
+		"Creator DLC", "creatordlc", path,
+	)
+	return err
 }
 
 func GetBranches() ([]ArmaBranch, error) {
@@ -274,6 +302,24 @@ func GetBranch(id int) (*ArmaBranch, error) {
 	err := db.QueryRow(`
 		SELECT id, name, steam_branch, install_path, installed, last_updated
 		FROM arma_branches WHERE id = ?`, id).
+		Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated)
+	if err != nil {
+		return nil, err
+	}
+	if lastUpdated.Valid {
+		b.LastUpdated = lastUpdated.Time
+	}
+	b.InstallPath = utils.ResolveDataPath(b.InstallPath)
+	return &b, nil
+}
+
+// GetBranchBySteamBranch returns the first branch with the given Steam beta name.
+func GetBranchBySteamBranch(steamBranch string) (*ArmaBranch, error) {
+	var b ArmaBranch
+	var lastUpdated sql.NullTime
+	err := db.QueryRow(`
+		SELECT id, name, steam_branch, install_path, installed, last_updated
+		FROM arma_branches WHERE steam_branch = ? ORDER BY id LIMIT 1`, steamBranch).
 		Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated)
 	if err != nil {
 		return nil, err
@@ -320,6 +366,7 @@ func GetServers() ([]Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
 		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(enabled_cdlcs, ''),
 		       COALESCE(headless_count, 0),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers ORDER BY name`)
@@ -334,6 +381,7 @@ func GetServer(id int) (*Server, error) {
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
 		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(enabled_cdlcs, ''),
 		       COALESCE(headless_count, 0),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers WHERE id = ?`, id)
@@ -356,9 +404,10 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 	for rows.Next() {
 		var s Server
 		var modsetID sql.NullInt64
+		var enabledCdlcs string
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
-			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &s.HeadlessCount,
+			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &enabledCdlcs, &s.HeadlessCount,
 			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -367,6 +416,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 			v := int(modsetID.Int64)
 			s.ModsetID = &v
 		}
+		s.EnabledCdlcs = DecodeCdlcs(enabledCdlcs)
 		servers = append(servers, s)
 	}
 	return servers, rows.Err()
@@ -388,18 +438,18 @@ func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, stea
 	return result.LastInsertId()
 }
 
-func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, extraLaunchParams string) error {
+func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, extraLaunchParams string, enabledCdlcs []string) error {
 	srv, err := GetServer(id)
 	if err != nil {
 		return err
 	}
 	_, err = db.Exec(`
 		UPDATE servers SET name = ?, branch_id = ?, modset_id = ?, game_port = ?, steam_port = ?,
-			profile_name = ?, server_binary = ?, extra_launch_params = ?,
+			profile_name = ?, server_binary = ?, extra_launch_params = ?, enabled_cdlcs = ?,
 			updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`,
 		name, branchID, modsetID, gamePort, steamPort, profileName,
-		strings.TrimSpace(serverBinary), extraLaunchParams, id,
+		strings.TrimSpace(serverBinary), extraLaunchParams, EncodeCdlcs(enabledCdlcs), id,
 	)
 	if err != nil {
 		return err
@@ -635,6 +685,7 @@ func GetServersUsingPort(gamePort, steamPort int, excludeID int) ([]Server, erro
 	rows, err := db.Query(`
 		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
 		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
+		       COALESCE(enabled_cdlcs, ''),
 		       COALESCE(headless_count, 0),
 		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
 		FROM servers WHERE id != ? AND (game_port = ? OR steam_port = ? OR game_port = ? OR steam_port = ?)`,
@@ -645,6 +696,43 @@ func GetServersUsingPort(gamePort, steamPort int, excludeID int) ([]Server, erro
 	}
 	defer rows.Close()
 	return scanServers(rows)
+}
+
+// EncodeCdlcs serializes cDLC folder codes as a semicolon-separated list.
+func EncodeCdlcs(codes []string) string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, c := range codes {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return strings.Join(out, ";")
+}
+
+// DecodeCdlcs parses a semicolon-separated cDLC code list.
+func DecodeCdlcs(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return []string{}
+	}
+	parts := strings.Split(s, ";")
+	seen := make(map[string]bool)
+	var out []string
+	for _, p := range parts {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	if out == nil {
+		return []string{}
+	}
+	return out
 }
 
 func nullIfEmpty(s string) interface{} {

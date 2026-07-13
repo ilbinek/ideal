@@ -149,6 +149,10 @@ func ParseServerCfgPassword(slug string) string {
 }
 
 func buildModParams(instanceDir string, serverID int, slug string) (modParam, serverModParam string) {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return "", ""
+	}
 	serverMods, err := database.GetServerMods(serverID)
 	if err != nil {
 		return "", ""
@@ -156,6 +160,14 @@ func buildModParams(instanceDir string, serverID int, slug string) (modParam, se
 
 	usedNames := make(map[string]int)
 	var clientMods, serverModsList []string
+
+	fallbackGameDir := ""
+	if branch, err := database.GetBranch(srv.BranchID); err == nil {
+		fallbackGameDir = BranchGameDir(branch.InstallPath)
+	}
+	for _, code := range FilterResolvableCdlcs(srv.EnabledCdlcs, fallbackGameDir) {
+		clientMods = append(clientMods, code)
+	}
 
 	for _, sm := range serverMods {
 		if !sm.Enabled {

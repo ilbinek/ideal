@@ -38,6 +38,10 @@ func GetBranchesHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, branches)
 }
 
+func GetCdlcsHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, server.ListAvailableCdlcs())
+}
+
 func CreateBranchHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name        string `json:"name"`
@@ -246,14 +250,15 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name              string `json:"name"`
-		BranchID          int    `json:"branchId"`
-		ModsetID          *int   `json:"modsetId"`
-		GamePort          int    `json:"gamePort"`
-		SteamPort         int    `json:"steamPort"`
-		ProfileName       string `json:"profileName"`
-		ServerBinary      string `json:"serverBinary"`
-		ExtraLaunchParams string `json:"extraLaunchParams"`
+		Name              string   `json:"name"`
+		BranchID          int      `json:"branchId"`
+		ModsetID          *int     `json:"modsetId"`
+		GamePort          int      `json:"gamePort"`
+		SteamPort         int      `json:"steamPort"`
+		ProfileName       string   `json:"profileName"`
+		ServerBinary      string   `json:"serverBinary"`
+		ExtraLaunchParams string   `json:"extraLaunchParams"`
+		EnabledCdlcs      []string `json:"enabledCdlcs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -265,7 +270,8 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modsetChanged := !modsetIDsEqual(existing.ModsetID, body.ModsetID)
-	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.ExtraLaunchParams); err != nil {
+	cdlcsChanged := !stringSlicesEqual(existing.EnabledCdlcs, database.DecodeCdlcs(database.EncodeCdlcs(body.EnabledCdlcs)))
+	if err := database.UpdateServer(id, body.Name, body.BranchID, body.ModsetID, body.GamePort, body.SteamPort, body.ProfileName, body.ServerBinary, body.ExtraLaunchParams, body.EnabledCdlcs); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update server")
 		return
 	}
@@ -290,8 +296,24 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		if err := server.ProvisionServer(id); err != nil {
 			log.Printf("[SERVER] provision after modset update: %v", err)
 		}
+	} else if cdlcsChanged {
+		if err := server.ProvisionServer(id); err != nil {
+			log.Printf("[SERVER] provision after cDLC update: %v", err)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func modsetIDsEqual(a, b *int) bool {

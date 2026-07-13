@@ -63,6 +63,7 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("POST /api/branches/{id}/install", apiAuth(InstallBranchHandler))
 	mux.HandleFunc("GET /api/branches/{id}/binaries", apiAuth(ListBranchBinariesHandler))
 	mux.HandleFunc("GET /api/branches/install/stream", apiAuth(BranchInstallStreamHandler))
+	mux.HandleFunc("GET /api/cdlcs", apiAuth(GetCdlcsHandler))
 
 	// Servers
 	mux.HandleFunc("GET /api/servers", apiAuth(GetServersHandler))
