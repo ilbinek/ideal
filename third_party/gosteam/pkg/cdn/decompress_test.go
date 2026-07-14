@@ -1,6 +1,7 @@
 package cdn
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/binary"
 	"testing"
@@ -43,5 +44,34 @@ func TestDecompressVZstd(t *testing.T) {
 func TestDecompressUnknownMagic(t *testing.T) {
 	if _, err := decompressChunk(bytes.Repeat([]byte{0xAB}, 32)); err == nil {
 		t.Fatal("expected error for unknown compression magic")
+	}
+}
+
+func TestDecompressPKZip(t *testing.T) {
+	orig := bytes.Repeat([]byte("pkzip steam depot chunk payload "), 32)
+
+	var zbuf bytes.Buffer
+	zw := zip.NewWriter(&zbuf)
+	w, err := zw.Create("chunk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(orig); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw := zbuf.Bytes()
+	if raw[0] != 'P' || raw[1] != 'K' {
+		t.Fatalf("expected PK magic, got %#x", raw[:2])
+	}
+
+	out, err := decompressChunk(raw)
+	if err != nil {
+		t.Fatalf("decompressChunk: %v", err)
+	}
+	if !bytes.Equal(out, orig) {
+		t.Fatalf("round-trip mismatch: got %d bytes, want %d", len(out), len(orig))
 	}
 }

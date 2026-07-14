@@ -1,6 +1,7 @@
 package cdn
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 // decompressChunk decompresses a decrypted depot chunk. Steam wraps chunk data
 // in one of three containers, identified by the first bytes: VZstd ("VSZa",
 // zstd), VZip ("VZa", LZMA), or a raw zip ("PK\x03\x04"). Ported from
-// SteamKit2's DepotChunk.Process + VZstdUtil/VZipUtil.
+// SteamKit2's DepotChunk.Process + VZstdUtil/VZipUtil/ZipUtil.
 func decompressChunk(data []byte) ([]byte, error) {
 	if len(data) < 16 {
 		return nil, fmt.Errorf("cdn: decrypted chunk too small (%d bytes)", len(data))
@@ -24,7 +25,7 @@ func decompressChunk(data []byte) ([]byte, error) {
 	case data[0] == 'V' && data[1] == 'Z' && data[2] == 'a':
 		return decompressVZip(data)
 	case data[0] == 'P' && data[1] == 'K' && data[2] == 0x03 && data[3] == 0x04:
-		return nil, fmt.Errorf("cdn: PKZip chunk compression not supported")
+		return decompressPKZip(data)
 	default:
 		return nil, fmt.Errorf("cdn: unknown chunk compression (first bytes %#x)", data[:4])
 	}
@@ -94,6 +95,28 @@ func decompressVZip(vz []byte) ([]byte, error) {
 	}
 	if uint32(len(out)) != sizeDecompressed {
 		return nil, fmt.Errorf("cdn: lzma size mismatch (got %d, want %d)", len(out), sizeDecompressed)
+	}
+	return out, nil
+}
+
+// decompressPKZip handles the oldest chunk container: a standard ZIP archive
+// with a single entry (SteamKit2 ZipUtil.Decompress).
+func decompressPKZip(data []byte) ([]byte, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("cdn: pkzip open: %w", err)
+	}
+	if len(zr.File) == 0 {
+		return nil, fmt.Errorf("cdn: pkzip has no entries")
+	}
+	f, err := zr.File[0].Open()
+	if err != nil {
+		return nil, fmt.Errorf("cdn: pkzip entry: %w", err)
+	}
+	defer f.Close()
+	out, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("cdn: pkzip read: %w", err)
 	}
 	return out, nil
 }
