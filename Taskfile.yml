@@ -87,9 +87,13 @@ tasks:
       - go build -ldflags "-s -w" -o {{.DIST_DIR}}/{{.RELEASE_NAME}} .
 
   run:
-    desc: Build if sources changed, then run the Ideal binary
+    desc: Build if sources changed, then run the Ideal binary from the project root
     deps:
       - build
+    dir: "{{.ROOT_DIR}}"
+    env:
+      # Keep runtime data next to the Taskfile, not under dist/ where the binary lives.
+      IDEAL_DATA_DIR: "{{.ROOT_DIR}}"
     cmds:
       - "{{.DIST_DIR}}/{{.BINARY}}{{exeExt}}"
 
