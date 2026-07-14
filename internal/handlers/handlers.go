@@ -119,6 +119,8 @@ func APIHandler() http.Handler {
 	// Missions
 	mux.HandleFunc("GET /api/servers/{id}/missions", apiAuth(ListMissionsHandler))
 	mux.HandleFunc("POST /api/servers/{id}/missions/upload", apiAuth(UploadMissionHandler))
+	mux.HandleFunc("POST /api/servers/{id}/missions/delete", apiAuth(DeleteMissionsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/missions/{name}/download", apiAuth(DownloadMissionHandler))
 	mux.HandleFunc("DELETE /api/servers/{id}/missions/{name}", apiAuth(DeleteMissionHandler))
 
 	return mux

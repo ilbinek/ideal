@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1584,6 +1584,42 @@ function MissionsTab({ serverId }: { serverId: number }) {
   });
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+
+  const missionNames = useMemo(
+    () => new Set((missions.data ?? []).map((m) => m.name)),
+    [missions.data],
+  );
+
+  useEffect(() => {
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const name of prev) {
+        if (missionNames.has(name)) next.add(name);
+        else changed = true;
+      }
+      return changed || next.size !== prev.size ? next : prev;
+    });
+  }, [missionNames]);
+
+  const allNames = missions.data?.map((m) => m.name) ?? [];
+  const allSelected = allNames.length > 0 && allNames.every((n) => selected.has(n));
+  const someSelected = selected.size > 0 && !allSelected;
+
+  const toggleOne = (name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(allNames));
+  };
 
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
@@ -1622,7 +1658,81 @@ function MissionsTab({ serverId }: { serverId: number }) {
 
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteMission(serverId, name),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["missions", serverId] }),
+    onSuccess: (_data, name) => {
+      setSelected((prev) => {
+        if (!prev.has(name)) return prev;
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      queryClient.invalidateQueries({ queryKey: ["missions", serverId] });
+      toast.success("Mission deleted");
+    },
+    onError: (e) =>
+      toast.error("Delete failed", e instanceof ApiError ? e.message : undefined),
+  });
+
+  const removeMany = useMutation({
+    mutationFn: (names: string[]) => api.deleteMissions(serverId, names),
+    onSuccess: (res) => {
+      setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey: ["missions", serverId] });
+      if (res.failed.length === 0) {
+        toast.success(
+          res.deleted.length === 1
+            ? "Mission deleted"
+            : `Deleted ${res.deleted.length} missions`,
+        );
+      } else if (res.deleted.length === 0) {
+        toast.error(
+          "Delete failed",
+          res.failed.map((f) => `${f.name}: ${f.error}`).join("; "),
+        );
+      } else {
+        toast.error(
+          `Deleted ${res.deleted.length}, failed ${res.failed.length}`,
+          res.failed.map((f) => `${f.name}: ${f.error}`).join("; "),
+        );
+      }
+    },
+    onError: (e) =>
+      toast.error("Delete failed", e instanceof ApiError ? e.message : undefined),
+  });
+
+  const downloadOne = useMutation({
+    mutationFn: (name: string) => api.downloadMission(serverId, name),
+    onError: (e) =>
+      toast.error("Download failed", e instanceof ApiError ? e.message : undefined),
+  });
+
+  const downloadMany = useMutation({
+    mutationFn: async (names: string[]) => {
+      const failed: string[] = [];
+      for (const name of names) {
+        try {
+          await api.downloadMission(serverId, name);
+        } catch (e) {
+          failed.push(`${name}${e instanceof ApiError ? `: ${e.message}` : ""}`);
+        }
+      }
+      return { ok: names.length - failed.length, failed };
+    },
+    onSuccess: (res) => {
+      if (res.failed.length === 0) {
+        toast.success(
+          res.ok === 1 ? "Download started" : `Downloading ${res.ok} missions`,
+        );
+      } else if (res.ok === 0) {
+        toast.error("Download failed", res.failed.join("; "));
+      } else {
+        toast.error(
+          `Downloaded ${res.ok}, failed ${res.failed.length}`,
+          res.failed.join("; "),
+        );
+      }
+    },
+    onError: (e) =>
+      toast.error("Download failed", e instanceof ApiError ? e.message : undefined),
   });
 
   const uploadPbos = (list: FileList | File[]) => {
@@ -1639,6 +1749,15 @@ function MissionsTab({ serverId }: { serverId: number }) {
     setDrag(false);
     uploadPbos(e.dataTransfer.files);
   };
+
+  const busy =
+    upload.isPending ||
+    remove.isPending ||
+    removeMany.isPending ||
+    downloadOne.isPending ||
+    downloadMany.isPending;
+
+  const selectedList = Array.from(selected);
 
   return (
     <div className="flex flex-col gap-4">
@@ -1684,39 +1803,120 @@ function MissionsTab({ serverId }: { serverId: number }) {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-base">Missions</CardTitle>
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-muted-foreground">
+                {selected.size} selected
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => downloadMany.mutate(selectedList)}
+              >
+                {downloadMany.isPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+                Download
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    !confirm(
+                      `Delete ${selected.size} mission${selected.size === 1 ? "" : "s"}?`,
+                    )
+                  ) {
+                    return;
+                  }
+                  removeMany.mutate(selectedList);
+                }}
+              >
+                {removeMany.isPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+                Delete
+              </Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded border-input"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelected;
+                    }}
+                    disabled={!allNames.length || busy}
+                    onChange={toggleAll}
+                    aria-label="Select all missions"
+                  />
+                </TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Size</TableHead>
-                <TableHead />
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {missions.data?.map((m) => (
-                <TableRow key={m.name}>
-                  <TableCell>{m.name}</TableCell>
-                  <TableCell>{(m.size / 1024 / 1024).toFixed(2)} MB</TableCell>
-                  <TableCell>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        if (confirm(`Delete ${m.name}?`)) remove.mutate(m.name);
-                      }}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {missions.data?.map((m) => {
+                const checked = selected.has(m.name);
+                return (
+                  <TableRow key={m.name} data-state={checked ? "selected" : undefined}>
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded border-input"
+                        checked={checked}
+                        disabled={busy}
+                        onChange={() => toggleOne(m.name)}
+                        aria-label={`Select ${m.name}`}
+                      />
+                    </TableCell>
+                    <TableCell className="font-medium">{m.name}</TableCell>
+                    <TableCell>{(m.size / 1024 / 1024).toFixed(2)} MB</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => downloadOne.mutate(m.name)}
+                          aria-label={`Download ${m.name}`}
+                        >
+                          <Download className="size-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => {
+                            if (confirm(`Delete ${m.name}?`)) remove.mutate(m.name);
+                          }}
+                          aria-label={`Delete ${m.name}`}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
               {!missions.data?.length && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-muted-foreground">
+                  <TableCell colSpan={4} className="text-muted-foreground">
                     No missions uploaded.
                   </TableCell>
                 </TableRow>

@@ -1116,8 +1116,64 @@ func DeleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	if strings.Contains(name, "..") || strings.Contains(name, "/") {
-		writeError(w, http.StatusBadRequest, "invalid filename")
+	srv, err := database.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err := server.DeleteMission(srv.Slug, name); err != nil {
+		msg := err.Error()
+		status := http.StatusInternalServerError
+		if strings.Contains(msg, "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(msg, "invalid") || strings.Contains(msg, "must be") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func DownloadMissionHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	name := r.PathValue("name")
+	srv, err := database.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	f, filename, err := server.OpenMissionForDownload(srv.Slug, name)
+	if err != nil {
+		msg := err.Error()
+		status := http.StatusNotFound
+		if strings.Contains(msg, "invalid") || strings.Contains(msg, "must be") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, msg)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	http.ServeContent(w, r, filename, info.ModTime(), f)
+}
+
+func DeleteMissionsHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid server id")
 		return
 	}
 	srv, err := database.GetServer(id)
@@ -1125,10 +1181,16 @@ func DeleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-	path := filepath.Join(server.InstanceDir(srv.Slug), "mpmissions", name)
-	if err := os.Remove(path); err != nil {
-		writeError(w, http.StatusNotFound, "mission not found")
+	var body struct {
+		Names []string `json:"names"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	if len(body.Names) == 0 {
+		writeError(w, http.StatusBadRequest, "names required")
+		return
+	}
+	writeJSON(w, http.StatusOK, server.DeleteMissions(srv.Slug, body.Names))
 }

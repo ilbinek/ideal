@@ -392,4 +392,40 @@ export const api = {
     request<{ ok: boolean }>(`/api/servers/${id}/missions/${encodeURIComponent(name)}`, {
       method: "DELETE",
     }),
+  deleteMissions: (id: number, names: string[]) =>
+    request<{ deleted: string[]; failed: { name: string; error: string }[] }>(
+      `/api/servers/${id}/missions/delete`,
+      {
+        method: "POST",
+        body: JSON.stringify({ names }),
+      },
+    ),
+  downloadMission: async (id: number, name: string) => {
+    const res = await fetch(
+      `/api/servers/${id}/missions/${encodeURIComponent(name)}/download`,
+    );
+    if (res.status === 401) {
+      unauthorizedHandler?.();
+      throw new ApiError(401, "unauthorized");
+    }
+    if (!res.ok) {
+      let message = res.statusText;
+      try {
+        const body = await res.json();
+        if (body?.error) message = body.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, message);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

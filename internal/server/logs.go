@@ -463,6 +463,94 @@ func ListMissions(slug string) ([]LogEntry, error) {
 // MissionUploadMaxBytes is the default max mission upload size (500 MB).
 const MissionUploadMaxBytes = 500 << 20
 
+func validateMissionFilename(name string) error {
+	if name == "" || name != filepath.Base(name) {
+		return fmt.Errorf("invalid filename")
+	}
+	if strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("invalid filename")
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".pbo") {
+		return fmt.Errorf("file must be a .pbo")
+	}
+	return nil
+}
+
+func missionPath(slug, name string) (string, error) {
+	if err := validateMissionFilename(name); err != nil {
+		return "", err
+	}
+	return filepath.Join(InstanceDir(slug), "mpmissions", filepath.Base(name)), nil
+}
+
+// OpenMissionForDownload opens a mission PBO for streaming to the client.
+func OpenMissionForDownload(slug, name string) (*os.File, string, error) {
+	path, err := missionPath(slug, name)
+	if err != nil {
+		return nil, "", err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, "", fmt.Errorf("mission not found")
+		}
+		return nil, "", err
+	}
+	return f, filepath.Base(path), nil
+}
+
+// DeleteMission removes one mission PBO under mpmissions.
+func DeleteMission(slug, name string) error {
+	path, err := missionPath(slug, name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("mission not found")
+		}
+		return err
+	}
+	return nil
+}
+
+// MissionDeleteFailure is one failed name in a bulk delete.
+type MissionDeleteFailure struct {
+	Name  string `json:"name"`
+	Error string `json:"error"`
+}
+
+// MissionDeleteResult is the outcome of DeleteMissions.
+type MissionDeleteResult struct {
+	Deleted []string               `json:"deleted"`
+	Failed  []MissionDeleteFailure `json:"failed"`
+}
+
+// DeleteMissions removes multiple mission PBOs. Missing files are reported in Failed.
+func DeleteMissions(slug string, names []string) MissionDeleteResult {
+	res := MissionDeleteResult{
+		Deleted: []string{},
+		Failed:  []MissionDeleteFailure{},
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = filepath.Base(strings.TrimSpace(name))
+		if name == "" || name == "." {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		if err := DeleteMission(slug, name); err != nil {
+			res.Failed = append(res.Failed, MissionDeleteFailure{Name: name, Error: err.Error()})
+			continue
+		}
+		res.Deleted = append(res.Deleted, name)
+	}
+	return res
+}
+
 // ConfigFileName validates and returns path for server config files.
 func ConfigFilePath(slug, name string) (string, error) {
 	allowed := map[string]bool{"server.cfg": true, "basic.cfg": true}
