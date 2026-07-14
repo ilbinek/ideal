@@ -9,6 +9,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Search,
   Square,
   Trash2,
   Upload,
@@ -1585,11 +1586,19 @@ function MissionsTab({ serverId }: { serverId: number }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [filter, setFilter] = useState("");
 
   const missionNames = useMemo(
     () => new Set((missions.data ?? []).map((m) => m.name)),
     [missions.data],
   );
+
+  const filteredMissions = useMemo(() => {
+    const list = missions.data ?? [];
+    const q = filter.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((m) => m.name.toLowerCase().includes(q));
+  }, [missions.data, filter]);
 
   useEffect(() => {
     setSelected((prev) => {
@@ -1603,9 +1612,11 @@ function MissionsTab({ serverId }: { serverId: number }) {
     });
   }, [missionNames]);
 
-  const allNames = missions.data?.map((m) => m.name) ?? [];
-  const allSelected = allNames.length > 0 && allNames.every((n) => selected.has(n));
-  const someSelected = selected.size > 0 && !allSelected;
+  const visibleNames = filteredMissions.map((m) => m.name);
+  const allSelected =
+    visibleNames.length > 0 && visibleNames.every((n) => selected.has(n));
+  const someSelected =
+    visibleNames.some((n) => selected.has(n)) && !allSelected;
 
   const toggleOne = (name: string) => {
     setSelected((prev) => {
@@ -1617,8 +1628,15 @@ function MissionsTab({ serverId }: { serverId: number }) {
   };
 
   const toggleAll = () => {
-    if (allSelected) setSelected(new Set());
-    else setSelected(new Set(allNames));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const name of visibleNames) next.delete(name);
+      } else {
+        for (const name of visibleNames) next.add(name);
+      }
+      return next;
+    });
   };
 
   const upload = useMutation({
@@ -1848,7 +1866,17 @@ function MissionsTab({ serverId }: { serverId: number }) {
             </div>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter missions…"
+              className="pl-8"
+              aria-label="Filter missions"
+            />
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -1860,9 +1888,9 @@ function MissionsTab({ serverId }: { serverId: number }) {
                     ref={(el) => {
                       if (el) el.indeterminate = someSelected;
                     }}
-                    disabled={!allNames.length || busy}
+                    disabled={!visibleNames.length || busy}
                     onChange={toggleAll}
-                    aria-label="Select all missions"
+                    aria-label="Select all visible missions"
                   />
                 </TableHead>
                 <TableHead>Name</TableHead>
@@ -1871,7 +1899,7 @@ function MissionsTab({ serverId }: { serverId: number }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {missions.data?.map((m) => {
+              {filteredMissions.map((m) => {
                 const checked = selected.has(m.name);
                 return (
                   <TableRow key={m.name} data-state={checked ? "selected" : undefined}>
@@ -1918,6 +1946,13 @@ function MissionsTab({ serverId }: { serverId: number }) {
                 <TableRow>
                   <TableCell colSpan={4} className="text-muted-foreground">
                     No missions uploaded.
+                  </TableCell>
+                </TableRow>
+              )}
+              {!!missions.data?.length && !filteredMissions.length && (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-muted-foreground">
+                    No missions match “{filter.trim()}”.
                   </TableCell>
                 </TableRow>
               )}
