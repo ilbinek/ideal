@@ -16,7 +16,7 @@ import {
 import { api, ApiError } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
-import { formatDate, formatBytes, formatCpuPercent, cpuGaugeFill, memoryGaugeFill, formatMemoryOfHost } from "@/lib/utils";
+import { formatDate, formatBytes, formatCpuPercent, formatBytesPerSec, cpuGaugeFill, memoryGaugeFill, formatMemoryOfHost } from "@/lib/utils";
 import { HalfCircleGauge } from "@/components/HalfCircleGauge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -243,15 +243,29 @@ export function ServerDetail() {
   );
 }
 
+function useNetPeak(bps: number): number {
+  const floor = 1024 * 1024; // 1 MiB/s so quiet links still show motion
+  const peakRef = useRef(floor);
+  if (Number.isFinite(bps) && bps > peakRef.current) {
+    peakRef.current = bps;
+  }
+  return Math.max(peakRef.current, floor);
+}
+
 function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
+  const recv = metrics?.netRecvBytesPerSec ?? 0;
+  const sent = metrics?.netSentBytesPerSec ?? 0;
+  const recvPeak = useNetPeak(recv);
+  const sentPeak = useNetPeak(sent);
   if (!metrics) return null;
+
   const cpuFill = cpuGaugeFill(metrics.cpuPercent, metrics.cpuCount);
   const memFill = memoryGaugeFill(metrics.memoryBytes, metrics.memoryTotalBytes);
   const memPct = formatMemoryOfHost(metrics.memoryBytes, metrics.memoryTotalBytes);
   const cores = metrics.cpuCount > 0 ? metrics.cpuCount : 1;
 
   return (
-    <div className="flex flex-wrap items-end gap-6">
+    <div className="flex flex-wrap items-end gap-4 sm:gap-6">
       <HalfCircleGauge
         value={cpuFill}
         label="CPU"
@@ -264,11 +278,49 @@ function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
         display={memPct}
         detail={`${formatBytes(metrics.memoryBytes)} / ${formatBytes(metrics.memoryTotalBytes)}`}
       />
+      <HalfCircleGauge
+        value={recv / recvPeak}
+        label="Net ↓"
+        display={formatBytesPerSec(recv)}
+        detail="host RX"
+      />
+      <HalfCircleGauge
+        value={sent / sentPeak}
+        label="Net ↑"
+        display={formatBytesPerSec(sent)}
+        detail="host TX"
+      />
       <div className="mb-1 flex flex-col gap-0.5 pb-1 text-sm">
         <span className="text-xs font-medium text-muted-foreground">Threads</span>
         <span className="text-lg font-semibold tabular-nums leading-none">{metrics.threads}</span>
       </div>
     </div>
+  );
+}
+
+function LiveMetricsCard({ serverId }: { serverId: number }) {
+  const { statusFor } = useServers();
+  const live = statusFor(serverId);
+  const status = live?.status;
+  const show =
+    (status === "running" || status === "starting" || status === "stopping") &&
+    !!live?.metrics;
+  if (!show || !live?.metrics) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Process</CardTitle>
+        <CardDescription>
+          Live stats for PID {live.pid > 0 ? live.pid : "—"}
+          {live.uptime > 0 ? ` · ${live.uptime}s uptime` : ""}
+          {" · "}network is host-wide
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ProcessMetricsStrip metrics={live.metrics} />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -290,11 +342,6 @@ function OverviewTab({
   };
 }) {
   const queryClient = useQueryClient();
-  const { statusFor } = useServers();
-  const live = statusFor(serverId);
-  const liveStatus = live?.status;
-  const showMetrics =
-    liveStatus === "running" || liveStatus === "starting" || liveStatus === "stopping";
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
   const modsets = useQuery({ queryKey: ["modsets"], queryFn: () => api.getModsets() });
   const launch = useQuery({
@@ -370,20 +417,7 @@ function OverviewTab({
 
   return (
     <div className="flex flex-col gap-4">
-      {showMetrics && live?.metrics && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Process</CardTitle>
-            <CardDescription>
-              Live stats for PID {live.pid > 0 ? live.pid : "—"}
-              {live.uptime > 0 ? ` · ${live.uptime}s uptime` : ""}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ProcessMetricsStrip metrics={live.metrics} />
-          </CardContent>
-        </Card>
-      )}
+      <LiveMetricsCard serverId={serverId} />
 
       <div className="grid gap-4 lg:grid-cols-2">
       <Card>
@@ -1369,7 +1403,10 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   const activeSessionName = activePath ? activePath.split(/[/\\]/).pop() : "";
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
+    <div className="flex flex-col gap-4">
+      <LiveMetricsCard serverId={serverId} />
+
+      <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-1">
         <CardHeader>
           <CardTitle className="text-base">Log files</CardTitle>
@@ -1525,6 +1562,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
           </pre>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

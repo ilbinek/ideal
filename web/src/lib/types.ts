@@ -184,6 +184,10 @@ export interface ProcessMetrics {
   /** Host physical/virtual memory total for RAM gauge. */
   memoryTotalBytes: number;
   threads: number;
+  /** Host aggregate NIC receive throughput (bytes/sec). */
+  netRecvBytesPerSec: number;
+  /** Host aggregate NIC transmit throughput (bytes/sec). */
+  netSentBytesPerSec: number;
 }
 
 export interface ServerStatusSnapshot {

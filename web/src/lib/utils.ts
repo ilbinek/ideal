@@ -52,3 +52,12 @@ export function formatMemoryOfHost(used: number, total: number): string {
   const pct = (used / total) * 100;
   return `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
 }
+
+/** Format a throughput in bytes/sec (e.g. network rates). */
+export function formatBytesPerSec(bps: number | undefined): string {
+  if (bps == null || !Number.isFinite(bps) || bps < 0) return "—";
+  if (bps >= 1024 * 1024 * 1024) return `${(bps / (1024 * 1024 * 1024)).toFixed(2)} GiB/s`;
+  if (bps >= 1024 * 1024) return `${(bps / (1024 * 1024)).toFixed(1)} MiB/s`;
+  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KiB/s`;
+  return `${Math.round(bps)} B/s`;
+}

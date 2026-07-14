@@ -7,21 +7,31 @@ import (
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
+	gpsnet "github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-// ProcessMetrics is a point-in-time sample of a managed Arma process.
+// ProcessMetrics is a point-in-time sample of a managed Arma process,
+// plus host context used for gauges (RAM total, CPU count, NIC rates).
 type ProcessMetrics struct {
-	CPUPercent       float64 `json:"cpuPercent"`
-	CPUCount         int     `json:"cpuCount"`
-	MemoryBytes      uint64  `json:"memoryBytes"`
-	MemoryTotalBytes uint64  `json:"memoryTotalBytes"`
-	Threads          int32   `json:"threads"`
+	CPUPercent         float64 `json:"cpuPercent"`
+	CPUCount           int     `json:"cpuCount"`
+	MemoryBytes        uint64  `json:"memoryBytes"`
+	MemoryTotalBytes   uint64  `json:"memoryTotalBytes"`
+	Threads            int32   `json:"threads"`
+	NetRecvBytesPerSec float64 `json:"netRecvBytesPerSec"`
+	NetSentBytesPerSec float64 `json:"netSentBytesPerSec"`
 }
 
 type cpuSample struct {
 	times cpu.TimesStat
 	at    time.Time
+}
+
+type netSample struct {
+	recv uint64
+	sent uint64
+	at   time.Time
 }
 
 var (
@@ -32,6 +42,9 @@ var (
 	cachedCPUCount   atomic.Int32
 	cachedMemTotal   atomic.Uint64
 	hostInfoCachedAt atomic.Int64 // unix nano
+
+	netMu         sync.Mutex
+	lastNetSample netSample
 )
 
 const hostInfoTTL = 30 * time.Second
@@ -61,9 +74,43 @@ func hostInfo() (cpuCount int, memTotal uint64) {
 	return cpuCount, memTotal
 }
 
+// sampleHostNet returns aggregate host NIC throughput (bytes/sec) since the
+// previous call. First sample returns zeros. Call once per Snapshot.
+func sampleHostNet() (recvBps, sentBps float64) {
+	counters, err := gpsnet.IOCounters(false)
+	if err != nil || len(counters) == 0 {
+		return 0, 0
+	}
+	cur := netSample{
+		recv: counters[0].BytesRecv,
+		sent: counters[0].BytesSent,
+		at:   time.Now(),
+	}
+
+	netMu.Lock()
+	defer netMu.Unlock()
+	prev := lastNetSample
+	lastNetSample = cur
+	if prev.at.IsZero() {
+		return 0, 0
+	}
+	wall := cur.at.Sub(prev.at).Seconds()
+	if wall <= 0 {
+		return 0, 0
+	}
+	if cur.recv >= prev.recv {
+		recvBps = float64(cur.recv-prev.recv) / wall
+	}
+	if cur.sent >= prev.sent {
+		sentBps = float64(cur.sent-prev.sent) / wall
+	}
+	return recvBps, sentBps
+}
+
 // sampleProcess returns live CPU/memory/thread stats for pid.
 // CPU% is the interval usage since the previous sample for this PID
-// (0 on the first sample). Returns nil if the process cannot be queried.
+// (0 on the first sample). Host net rates should be applied by the caller
+// via attachHostNet. Returns nil if the process cannot be queried.
 func sampleProcess(pid int) *ProcessMetrics {
 	if pid <= 0 {
 		return nil
@@ -115,6 +162,14 @@ func sampleProcess(pid int) *ProcessMetrics {
 		MemoryTotalBytes: memTotal,
 		Threads:          threads,
 	}
+}
+
+func attachHostNet(m *ProcessMetrics, recvBps, sentBps float64) {
+	if m == nil {
+		return
+	}
+	m.NetRecvBytesPerSec = recvBps
+	m.NetSentBytesPerSec = sentBps
 }
 
 func dropCPUCache(pid int) {
