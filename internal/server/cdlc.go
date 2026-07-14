@@ -15,20 +15,22 @@ const CreatorDlcSteamBranch = "creatordlc"
 
 // Known Creator DLC folder codes and display names.
 var knownCdlcNames = map[string]string{
-	"gm":  "Global Mobilization",
-	"vn":  "S.O.G. Prairie Fire",
-	"ws":  "Western Sahara",
-	"spe": "Spearhead 1944",
-	"rf":  "Reaction Forces",
-	"ef":  "Expeditionary Forces",
+	"gm":   "Global Mobilization",
+	"vn":   "S.O.G. Prairie Fire",
+	"ws":   "Western Sahara",
+	"spe":  "Spearhead 1944",
+	"csla": "CSLA Iron Curtain",
+	"rf":   "Reaction Forces",
+	"ef":   "Expeditionary Forces",
 }
 
-// Core game dirs that must never be treated as cDLC packs.
+// Core game dirs / first-party DLCs that must never be treated as cDLC packs.
 var cdlcCoreSkip = map[string]bool{
 	"addons": true, "dta": true, "battleye": true, "keys": true,
 	"steamapps": true, "launcher": true, "curator": true, "expansion": true,
 	"heli": true, "jets": true, "kart": true, "mark": true, "orange": true,
 	"argo": true, "tank": true, "enoch": true, // Contact is first-party DLC
+	"tacops": true, "aow": true, // Tac-Ops / Art of War — first-party, not Creator DLC
 	"profiles": true, "mpmissions": true, "missions": true, "logs": true,
 	"mods": true, "servermods": true, "localmods": true,
 }
@@ -120,7 +122,7 @@ func ListAvailableCdlcs() CdlcCatalog {
 // ResolveCdlcPath finds a cDLC folder: prefer creatordlc install, then fallbackGameDir.
 func ResolveCdlcPath(code, fallbackGameDir string) (string, bool) {
 	code = strings.ToLower(strings.TrimSpace(code))
-	if code == "" {
+	if code == "" || cdlcCoreSkip[code] {
 		return "", false
 	}
 	if gameDir := CreatorDlcGameDir(); gameDir != "" {
