@@ -58,8 +58,10 @@ func main() {
 
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/") {
-			if h, pattern := missions.Handler(r); pattern != "" {
-				h.ServeHTTP(w, r)
+			// Handler() only checks a match; ServeHTTP is required so PathValue
+			// wildcards ({slug}, {name}) are populated on the request.
+			if _, pattern := missions.Handler(r); pattern != "" {
+				missions.ServeHTTP(w, r)
 				return
 			}
 		}
