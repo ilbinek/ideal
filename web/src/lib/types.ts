@@ -176,8 +176,13 @@ export interface HeadlessClientsResponse {
 }
 
 export interface ProcessMetrics {
+  /** Process CPU usage over the last sample interval; may exceed 100% on multi-core. */
   cpuPercent: number;
+  /** Logical CPU count (for gauge scale: full = 100% × cpuCount). */
+  cpuCount: number;
   memoryBytes: number;
+  /** Host physical/virtual memory total for RAM gauge. */
+  memoryTotalBytes: number;
   threads: number;
 }
 

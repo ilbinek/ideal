@@ -16,7 +16,8 @@ import {
 import { api, ApiError } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
-import { formatDate, formatBytes, formatCpuPercent } from "@/lib/utils";
+import { formatDate, formatBytes, formatCpuPercent, cpuGaugeFill, memoryGaugeFill, formatMemoryOfHost } from "@/lib/utils";
+import { HalfCircleGauge } from "@/components/HalfCircleGauge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -244,19 +245,28 @@ export function ServerDetail() {
 
 function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
   if (!metrics) return null;
+  const cpuFill = cpuGaugeFill(metrics.cpuPercent, metrics.cpuCount);
+  const memFill = memoryGaugeFill(metrics.memoryBytes, metrics.memoryTotalBytes);
+  const memPct = formatMemoryOfHost(metrics.memoryBytes, metrics.memoryTotalBytes);
+  const cores = metrics.cpuCount > 0 ? metrics.cpuCount : 1;
+
   return (
-    <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-      <div>
-        <span className="text-muted-foreground">CPU </span>
-        <span className="font-medium tabular-nums">{formatCpuPercent(metrics.cpuPercent)}</span>
-      </div>
-      <div>
-        <span className="text-muted-foreground">Memory </span>
-        <span className="font-medium tabular-nums">{formatBytes(metrics.memoryBytes)}</span>
-      </div>
-      <div>
-        <span className="text-muted-foreground">Threads </span>
-        <span className="font-medium tabular-nums">{metrics.threads}</span>
+    <div className="flex flex-wrap items-end gap-6">
+      <HalfCircleGauge
+        value={cpuFill}
+        label="CPU"
+        display={formatCpuPercent(metrics.cpuPercent)}
+        detail={`of ${cores}×100%`}
+      />
+      <HalfCircleGauge
+        value={memFill}
+        label="Memory"
+        display={memPct}
+        detail={`${formatBytes(metrics.memoryBytes)} / ${formatBytes(metrics.memoryTotalBytes)}`}
+      />
+      <div className="mb-1 flex flex-col gap-0.5 pb-1 text-sm">
+        <span className="text-xs font-medium text-muted-foreground">Threads</span>
+        <span className="text-lg font-semibold tabular-nums leading-none">{metrics.threads}</span>
       </div>
     </div>
   );
@@ -1868,7 +1878,9 @@ function HeadlessTab({
                       {running ? formatCpuPercent(c.metrics?.cpuPercent) : "—"}
                     </TableCell>
                     <TableCell className="tabular-nums text-muted-foreground">
-                      {running ? formatBytes(c.metrics?.memoryBytes) : "—"}
+                      {running && c.metrics
+                        ? `${formatBytes(c.metrics.memoryBytes)} (${formatMemoryOfHost(c.metrics.memoryBytes, c.metrics.memoryTotalBytes)})`
+                        : "—"}
                     </TableCell>
                     <TableCell className="tabular-nums text-muted-foreground">
                       {running && c.metrics ? c.metrics.threads : "—"}

@@ -33,3 +33,22 @@ export function formatCpuPercent(pct: number | undefined): string {
   if (pct == null || !Number.isFinite(pct)) return "—";
   return `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
 }
+
+/** 0–1 fill for CPU gauge: 1.0 = all logical cores fully busy. */
+export function cpuGaugeFill(cpuPercent: number, cpuCount: number): number {
+  const cores = cpuCount > 0 ? cpuCount : 1;
+  return Math.min(1, Math.max(0, cpuPercent / (100 * cores)));
+}
+
+/** 0–1 fill for RAM gauge vs host total memory. */
+export function memoryGaugeFill(used: number, total: number): number {
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.min(1, Math.max(0, used / total));
+}
+
+/** Process RAM as percent of host total. */
+export function formatMemoryOfHost(used: number, total: number): string {
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return "—";
+  const pct = (used / total) * 100;
+  return `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
+}

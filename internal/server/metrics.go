@@ -2,17 +2,21 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
 // ProcessMetrics is a point-in-time sample of a managed Arma process.
 type ProcessMetrics struct {
-	CPUPercent  float64 `json:"cpuPercent"`
-	MemoryBytes uint64  `json:"memoryBytes"`
-	Threads     int32   `json:"threads"`
+	CPUPercent       float64 `json:"cpuPercent"`
+	CPUCount         int     `json:"cpuCount"`
+	MemoryBytes      uint64  `json:"memoryBytes"`
+	MemoryTotalBytes uint64  `json:"memoryTotalBytes"`
+	Threads          int32   `json:"threads"`
 }
 
 type cpuSample struct {
@@ -24,7 +28,38 @@ var (
 	metricsMu  sync.Mutex
 	cpuCache   = map[int]cpuSample{}
 	activePIDs = map[int]struct{}{} // PIDs seen in the last Snapshot pass
+
+	cachedCPUCount   atomic.Int32
+	cachedMemTotal   atomic.Uint64
+	hostInfoCachedAt atomic.Int64 // unix nano
 )
+
+const hostInfoTTL = 30 * time.Second
+
+func hostInfo() (cpuCount int, memTotal uint64) {
+	now := time.Now().UnixNano()
+	prev := hostInfoCachedAt.Load()
+	cpuCount = int(cachedCPUCount.Load())
+	memTotal = cachedMemTotal.Load()
+	if prev > 0 && now-prev < int64(hostInfoTTL) && cpuCount > 0 && memTotal > 0 {
+		return cpuCount, memTotal
+	}
+
+	if n, err := cpu.Counts(true); err == nil && n > 0 {
+		cpuCount = n
+		cachedCPUCount.Store(int32(n))
+	} else if cpuCount <= 0 {
+		cpuCount = 1
+	}
+
+	if vm, err := mem.VirtualMemory(); err == nil && vm != nil && vm.Total > 0 {
+		memTotal = vm.Total
+		cachedMemTotal.Store(vm.Total)
+	}
+
+	hostInfoCachedAt.Store(now)
+	return cpuCount, memTotal
+}
 
 // sampleProcess returns live CPU/memory/thread stats for pid.
 // CPU% is the interval usage since the previous sample for this PID
@@ -44,13 +79,14 @@ func sampleProcess(pid int) *ProcessMetrics {
 		return nil
 	}
 
-	mem, err := p.MemoryInfo()
-	if err != nil || mem == nil {
+	memInfo, err := p.MemoryInfo()
+	if err != nil || memInfo == nil {
 		dropCPUCache(pid)
 		return nil
 	}
 
 	threads, _ := p.NumThreads()
+	cpuCount, memTotal := hostInfo()
 
 	now := time.Now()
 	times, err := p.Times()
@@ -73,9 +109,11 @@ func sampleProcess(pid int) *ProcessMetrics {
 	}
 
 	return &ProcessMetrics{
-		CPUPercent:  cpuPct,
-		MemoryBytes: mem.RSS,
-		Threads:     threads,
+		CPUPercent:       cpuPct,
+		CPUCount:         cpuCount,
+		MemoryBytes:      memInfo.RSS,
+		MemoryTotalBytes: memTotal,
+		Threads:          threads,
 	}
 }
 
