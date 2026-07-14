@@ -22,6 +22,62 @@ The frontend was built quickly for functionality over polish. Contributions that
 
 ---
 
+## Screenshots
+
+**Dashboard**
+
+![Dashboard](screenshots/dashboard.png)
+
+**Settings** — built-in gosteam downloader and Steam login
+
+![Settings](screenshots/settings.png)
+
+**Branches** — dedicated server installs
+
+![Branches](screenshots/branches.png)
+
+**Modsets** — import Arma 3 Launcher HTML presets
+
+![Modsets](screenshots/modsets.png)
+
+**Mods** — Workshop downloads, updates, and A3Sync generation
+
+![Mods](screenshots/mods.png)
+
+**Servers** — instance list
+
+![Servers](screenshots/servers.png)
+
+**Server overview** — branch, ports, launch params, command preview
+
+![Server overview](screenshots/server-overview.png)
+
+**Server mods** — Workshop / custom mods and provisioning
+
+![Server mods](screenshots/server-mods.png)
+
+**Server mods (local folders)** — scan a mods root or add custom paths
+
+![Server mods local](screenshots/server-mods-local.png)
+
+**Keys** — automatic `.bikey` collection
+
+![Keys](screenshots/server-keys.png)
+
+**Config** — simple / raw editors for `server.cfg`, `basic.cfg`, and profile
+
+![Config](screenshots/server-config.png)
+
+**Headless clients**
+
+![Headless clients](screenshots/headless-clients.png)
+
+**Missions** — upload and optional HTTP serving
+
+![Missions](screenshots/missions.png)
+
+---
+
 ## Prerequisites
 
 ### Downloader (pick one in Settings)
@@ -138,6 +194,7 @@ Point your A3Sync repository at that directory.
 ├── servers/<slug>/       # Per-server instances (configs, mods, logs, missions)
 ├── web/                  # React SPA source
 ├── web/dist/             # Built SPA (embedded via go:embed; not committed)
+├── screenshots/          # UI screenshots for this README
 └── dist/                 # task build / task run output
 ```
 
@@ -215,9 +272,3 @@ Build the frontend first (`task web:build` or `task build`).
 
 **CGO / sqlite build errors**  
 Install a C toolchain (e.g. gcc) and ensure `CGO_ENABLED=1`.
-
----
-
-## Contributing
-
-Issues and pull requests are welcome, especially for frontend improvements. Run `task lint` before submitting.
