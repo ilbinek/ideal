@@ -69,6 +69,23 @@ tasks:
     cmds:
       - go build -o {{.DIST_DIR}}/{{.BINARY}}{{exeExt}} .
 
+  build:release:
+    desc: Build a release-named binary for the current platform into dist/ (e.g. ideal-linux-amd64)
+    deps:
+      - web:build
+      - mkdist
+    vars:
+      RELEASE_NAME: '{{.BINARY}}-{{OS}}-{{ARCH}}{{if eq OS "windows"}}.exe{{end}}'
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - "{{.WEB_DIR}}/dist/**/*"
+    generates:
+      - "{{.DIST_DIR}}/{{.RELEASE_NAME}}"
+    cmds:
+      - go build -ldflags "-s -w" -o {{.DIST_DIR}}/{{.RELEASE_NAME}} .
+
   run:
     desc: Build if sources changed, then run the Ideal binary
     deps:
