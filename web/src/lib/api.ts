@@ -288,6 +288,14 @@ export const api = {
     request<{ ok: boolean }>(`/api/servers/${id}/logs/${encodeURIComponent(filename)}`, {
       method: "DELETE",
     }),
+  deleteServerLogs: (id: number, names: string[]) =>
+    request<{ deleted: string[]; failed: { name: string; error: string }[] }>(
+      `/api/servers/${id}/logs/delete`,
+      {
+        method: "POST",
+        body: JSON.stringify({ names }),
+      },
+    ),
   downloadServerLog: async (id: number, filename: string) => {
     const res = await fetch(`/api/servers/${id}/logs/${encodeURIComponent(filename)}/download`);
     if (res.status === 401) {

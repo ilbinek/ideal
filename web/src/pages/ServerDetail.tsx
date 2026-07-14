@@ -1324,6 +1324,7 @@ function ServerCfgSimpleFormFields({
 }
 
 function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean }) {
+  const toast = useToast();
   const queryClient = useQueryClient();
   const { text, activePath } = useServerLogs(serverId, isRunning);
   const logRef = useRef<HTMLPreElement>(null);
@@ -1335,16 +1336,34 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
     queryFn: () => api.listServerLogs(serverId),
     refetchInterval: isRunning ? 2000 : false,
   });
-  const [selected, setSelected] = useState<string | null>(null);
+  const [viewed, setViewed] = useState<string | null>(null);
   const [archived, setArchived] = useState("");
+  const [checked, setChecked] = useState<Set<string>>(() => new Set());
+
+  const logNames = useMemo(
+    () => new Set((logs.data ?? []).map((l) => l.name)),
+    [logs.data],
+  );
+
+  useEffect(() => {
+    setChecked((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const name of prev) {
+        if (logNames.has(name)) next.add(name);
+        else changed = true;
+      }
+      return changed || next.size !== prev.size ? next : prev;
+    });
+  }, [logNames]);
 
   useEffect(() => {
     if (isRunning) {
-      setView((v) => (v === "file" && selected ? "file" : "live"));
+      setView((v) => (v === "file" && viewed ? "file" : "live"));
     } else {
       setView("file");
     }
-  }, [isRunning, selected]);
+  }, [isRunning, viewed]);
 
   const showingLive = isRunning && view === "live";
   const viewerText = showingLive
@@ -1356,10 +1375,40 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [viewerText, autoScroll]);
 
+  const activeSessionName = activePath ? activePath.split(/[/\\]/).pop() : "";
+
+  const isActiveLog = useCallback(
+    (name: string) =>
+      !!(
+        isRunning &&
+        (name === activeSessionName || (activePath && activePath.endsWith(name)))
+      ),
+    [isRunning, activeSessionName, activePath],
+  );
+
+  const allLogNames = (logs.data ?? []).map((l) => l.name);
+  const allChecked =
+    allLogNames.length > 0 && allLogNames.every((n) => checked.has(n));
+  const someChecked = allLogNames.some((n) => checked.has(n)) && !allChecked;
+
+  const toggleOne = (name: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allChecked) setChecked(new Set());
+    else setChecked(new Set(allLogNames));
+  };
+
   const loadArchived = useCallback(
     async (name: string) => {
       setLogError("");
-      setSelected(name);
+      setViewed(name);
       setView("file");
       const data = await api.getServerLog(serverId, name, 0);
       setArchived(data.content);
@@ -1371,15 +1420,56 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
     mutationFn: (name: string) => api.deleteServerLog(serverId, name),
     onSuccess: (_data, name) => {
       setLogError("");
-      if (selected === name) {
-        setSelected(null);
+      setChecked((prev) => {
+        if (!prev.has(name)) return prev;
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      if (viewed === name) {
+        setViewed(null);
         setArchived("");
         setView(isRunning ? "live" : "file");
       }
       queryClient.invalidateQueries({ queryKey: ["serverLogs", serverId] });
+      toast.success("Log deleted");
     },
     onError: (err) => {
       setLogError(err instanceof Error ? err.message : "Failed to delete log");
+    },
+  });
+
+  const removeMany = useMutation({
+    mutationFn: (names: string[]) => api.deleteServerLogs(serverId, names),
+    onSuccess: (res) => {
+      setLogError("");
+      setChecked(new Set());
+      if (viewed && res.deleted.includes(viewed)) {
+        setViewed(null);
+        setArchived("");
+        setView(isRunning ? "live" : "file");
+      }
+      queryClient.invalidateQueries({ queryKey: ["serverLogs", serverId] });
+      if (res.failed.length === 0) {
+        toast.success(
+          res.deleted.length === 1
+            ? "Log deleted"
+            : `Deleted ${res.deleted.length} logs`,
+        );
+      } else if (res.deleted.length === 0) {
+        toast.error(
+          "Delete failed",
+          res.failed.map((f) => `${f.name}: ${f.error}`).join("; "),
+        );
+      } else {
+        toast.error(
+          `Deleted ${res.deleted.length}, failed ${res.failed.length}`,
+          res.failed.map((f) => `${f.name}: ${f.error}`).join("; "),
+        );
+      }
+    },
+    onError: (err) => {
+      setLogError(err instanceof Error ? err.message : "Failed to delete logs");
     },
   });
 
@@ -1389,7 +1479,6 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
         await api.downloadServerLog(serverId, name);
         return;
       }
-      // Live buffer download
       const blob = new Blob([text || ""], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -1405,7 +1494,44 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
     },
   });
 
-  const activeSessionName = activePath ? activePath.split(/[/\\]/).pop() : "";
+  const downloadMany = useMutation({
+    mutationFn: async (names: string[]) => {
+      const failed: string[] = [];
+      for (const name of names) {
+        try {
+          await api.downloadServerLog(serverId, name);
+        } catch (e) {
+          failed.push(`${name}${e instanceof ApiError ? `: ${e.message}` : ""}`);
+        }
+      }
+      return { ok: names.length - failed.length, failed };
+    },
+    onSuccess: (res) => {
+      setLogError("");
+      if (res.failed.length === 0) {
+        toast.success(
+          res.ok === 1 ? "Download started" : `Downloading ${res.ok} logs`,
+        );
+      } else if (res.ok === 0) {
+        toast.error("Download failed", res.failed.join("; "));
+      } else {
+        toast.error(
+          `Downloaded ${res.ok}, failed ${res.failed.length}`,
+          res.failed.join("; "),
+        );
+      }
+    },
+    onError: (err) => {
+      setLogError(err instanceof Error ? err.message : "Failed to download logs");
+    },
+  });
+
+  const busy =
+    remove.isPending ||
+    removeMany.isPending ||
+    download.isPending ||
+    downloadMany.isPending;
+  const checkedList = Array.from(checked);
 
   return (
     <div className="flex flex-col gap-4">
@@ -1413,17 +1539,80 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
 
       <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-1">
-        <CardHeader>
-          <CardTitle className="text-base">Log files</CardTitle>
-          <CardDescription>
-            Session logs and Arma RPT files under this server instance.
-          </CardDescription>
+        <CardHeader className="space-y-3">
+          <div>
+            <CardTitle className="text-base">Log files</CardTitle>
+            <CardDescription>
+              Session logs and Arma RPT files under this server instance.
+            </CardDescription>
+          </div>
+          {checked.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-muted-foreground">
+                {checked.size} selected
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  setLogError("");
+                  downloadMany.mutate(checkedList);
+                }}
+              >
+                {downloadMany.isPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+                Download
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    !confirm(
+                      `Delete ${checked.size} log${checked.size === 1 ? "" : "s"}?`,
+                    )
+                  ) {
+                    return;
+                  }
+                  setLogError("");
+                  removeMany.mutate(checkedList);
+                }}
+              >
+                {removeMany.isPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+                Delete
+              </Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent className="max-h-96 overflow-y-auto">
           {logError && (
             <p className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
               {logError}
             </p>
+          )}
+          {(logs.data?.length ?? 0) > 0 && (
+            <label className="mb-2 flex items-center gap-2 px-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                className="size-4 rounded border-input"
+                checked={allChecked}
+                ref={(el) => {
+                  if (el) el.indeterminate = someChecked;
+                }}
+                disabled={busy}
+                onChange={toggleAll}
+              />
+              Select all
+            </label>
           )}
           <ul className="text-sm">
             {isRunning && (
@@ -1447,26 +1636,32 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
               </li>
             )}
             {(logs.data ?? []).map((l) => {
-              const isActiveLive =
-                isRunning &&
-                (l.name === activeSessionName ||
-                  (activePath && activePath.endsWith(l.name)));
+              const active = isActiveLog(l.name);
+              const isChecked = checked.has(l.name);
               return (
                 <li
                   key={l.name}
                   className={`group flex items-start gap-1 rounded ${
-                    !showingLive && selected === l.name ? "bg-accent" : ""
+                    !showingLive && viewed === l.name ? "bg-accent" : ""
                   }`}
                 >
+                  <input
+                    type="checkbox"
+                    className="mt-2 ml-2 size-4 shrink-0 rounded border-input"
+                    checked={isChecked}
+                    disabled={busy}
+                    onChange={() => toggleOne(l.name)}
+                    aria-label={`Select ${l.name}`}
+                  />
                   <button
                     type="button"
-                    className="min-w-0 flex-1 px-2 py-1 text-left hover:bg-accent/80"
+                    className="min-w-0 flex-1 px-1 py-1 text-left hover:bg-accent/80"
                     onClick={() => loadArchived(l.name)}
                   >
                     <div className="truncate font-medium">{l.name}</div>
                     <div className="text-xs text-muted-foreground">
                       {formatDate(l.modTime)} · {(l.size / 1024).toFixed(1)} KB
-                      {isActiveLive ? " · active" : ""}
+                      {active ? " · active" : ""}
                     </div>
                   </button>
                   <div className="flex shrink-0 gap-0.5 py-1 pr-1 opacity-70 group-hover:opacity-100">
@@ -1475,7 +1670,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
                       variant="ghost"
                       className="size-7 p-0"
                       title="Download"
-                      disabled={download.isPending}
+                      disabled={busy}
                       onClick={(e) => {
                         e.stopPropagation();
                         setLogError("");
@@ -1488,8 +1683,10 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
                       size="sm"
                       variant="ghost"
                       className="size-7 p-0"
-                      title={isActiveLive ? "Stop the server to delete the active log" : "Delete"}
-                      disabled={remove.isPending || !!isActiveLive}
+                      title={
+                        active ? "Stop the server to delete the active log" : "Delete"
+                      }
+                      disabled={busy || active}
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!confirm(`Delete ${l.name}?`)) return;
@@ -1513,7 +1710,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <CardTitle className="text-base">
-              {showingLive ? "Live tail" : selected ? selected : "Log viewer"}
+              {showingLive ? "Live tail" : viewed ? viewed : "Log viewer"}
             </CardTitle>
             {showingLive && activePath && (
               <CardDescription className="truncate text-xs">
@@ -1533,23 +1730,23 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
             <Button
               size="sm"
               variant="outline"
-              disabled={download.isPending || (!showingLive && !selected)}
+              disabled={busy || (!showingLive && !viewed)}
               onClick={() => {
                 setLogError("");
-                download.mutate(showingLive ? null : selected);
+                download.mutate(showingLive ? null : viewed);
               }}
             >
               <Download className="size-3.5" />
               {showingLive ? "Save live buffer" : "Download"}
             </Button>
-            {!showingLive && selected && (
+            {!showingLive && viewed && (
               <Button
                 size="sm"
                 variant="outline"
-                disabled={remove.isPending}
+                disabled={busy || isActiveLog(viewed)}
                 onClick={() => {
-                  if (!confirm(`Delete ${selected}?`)) return;
-                  remove.mutate(selected);
+                  if (!confirm(`Delete ${viewed}?`)) return;
+                  remove.mutate(viewed);
                 }}
               >
                 <Trash2 className="size-3.5" />

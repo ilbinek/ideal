@@ -178,6 +178,43 @@ func DeleteLog(serverID int, slug, filename string) error {
 	return nil
 }
 
+// LogDeleteFailure is one failed name in a bulk log delete.
+type LogDeleteFailure struct {
+	Name  string `json:"name"`
+	Error string `json:"error"`
+}
+
+// LogDeleteResult is the outcome of DeleteLogs.
+type LogDeleteResult struct {
+	Deleted []string           `json:"deleted"`
+	Failed  []LogDeleteFailure `json:"failed"`
+}
+
+// DeleteLogs removes multiple log files. Active-session / not-found errors go to Failed.
+func DeleteLogs(serverID int, slug string, names []string) LogDeleteResult {
+	res := LogDeleteResult{
+		Deleted: []string{},
+		Failed:  []LogDeleteFailure{},
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = filepath.Base(strings.TrimSpace(name))
+		if name == "" || name == "." {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		if err := DeleteLog(serverID, slug, name); err != nil {
+			res.Failed = append(res.Failed, LogDeleteFailure{Name: name, Error: err.Error()})
+			continue
+		}
+		res.Deleted = append(res.Deleted, name)
+	}
+	return res
+}
+
 // OpenLogForDownload opens a log file for streaming to the client.
 func OpenLogForDownload(slug, filename string) (*os.File, string, error) {
 	if err := validateLogFilename(filename); err != nil {
