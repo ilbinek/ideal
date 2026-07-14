@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -38,6 +39,12 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import type { HeadlessClientSnapshot, ServerMod, ServerStatus } from "@/lib/types";
+import {
+  applyServerCfgForm,
+  defaultServerCfgForm,
+  parseServerCfgForm,
+  type ServerCfgSimpleForm,
+} from "@/lib/serverCfg";
 
 type Tab = "overview" | "mods" | "keys" | "config" | "logs" | "headless" | "missions";
 
@@ -880,14 +887,17 @@ function KeysTab({ serverId }: { serverId: number }) {
 
 function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus: string }) {
   type ConfigKind = "server.cfg" | "basic.cfg" | "profile";
+  type ServerCfgView = "simple" | "raw";
 
   const server = useQuery({
     queryKey: ["servers", serverId],
     queryFn: () => api.getServer(serverId),
   });
   const [kind, setKind] = useState<ConfigKind>("server.cfg");
+  const [serverCfgView, setServerCfgView] = useState<ServerCfgView>("simple");
   const [profileFile, setProfileFile] = useState<string | null>(null);
   const [content, setContent] = useState("");
+  const [form, setForm] = useState<ServerCfgSimpleForm>(defaultServerCfgForm);
   const [dirty, setDirty] = useState(false);
 
   const profileFiles = useQuery({
@@ -917,16 +927,42 @@ function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus:
   useEffect(() => {
     if (cfg.data) {
       setContent(cfg.data.content);
+      if (kind === "server.cfg") {
+        setForm(parseServerCfgForm(cfg.data.content));
+      }
       setDirty(false);
     }
   }, [cfg.data, kind, profileFile]);
+
+  const updateForm = <K extends keyof ServerCfgSimpleForm>(
+    key: K,
+    value: ServerCfgSimpleForm[K],
+  ) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setDirty(true);
+  };
+
+  const switchServerCfgView = (next: ServerCfgView) => {
+    if (next === serverCfgView) return;
+    if (next === "raw") {
+      setContent(applyServerCfgForm(content, form));
+    } else {
+      setForm(parseServerCfgForm(content));
+    }
+    setServerCfgView(next);
+  };
 
   const save = useMutation({
     mutationFn: () => {
       if (kind === "profile" && profileFile) {
         return api.putProfileFile(serverId, profileFile, content);
       }
-      return api.putServerConfig(serverId, kind, content);
+      let toSave = content;
+      if (kind === "server.cfg" && serverCfgView === "simple") {
+        toSave = applyServerCfgForm(content, form);
+        setContent(toSave);
+      }
+      return api.putServerConfig(serverId, kind, toSave);
     },
     onSuccess: () => setDirty(false),
   });
@@ -945,6 +981,9 @@ function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus:
                 size="sm"
                 variant={kind === k ? "default" : "outline"}
                 onClick={() => {
+                  if (kind === "server.cfg" && serverCfgView === "simple" && dirty) {
+                    setContent(applyServerCfgForm(content, form));
+                  }
                   setKind(k);
                   setDirty(false);
                 }}
@@ -957,6 +996,27 @@ function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus:
             Save
           </Button>
         </div>
+        {kind === "server.cfg" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant={serverCfgView === "simple" ? "default" : "outline"}
+              onClick={() => switchServerCfgView("simple")}
+            >
+              Simple
+            </Button>
+            <Button
+              size="sm"
+              variant={serverCfgView === "raw" ? "default" : "outline"}
+              onClick={() => switchServerCfgView("raw")}
+            >
+              Raw
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Simple edits the common settings; Raw opens the full server.cfg.
+            </p>
+          </div>
+        )}
         {kind === "profile" && (
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-xs text-muted-foreground">
@@ -993,6 +1053,8 @@ function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus:
             No profile file selected. Run the server to create profile files in{" "}
             <code>{profileFolder}</code>.
           </p>
+        ) : kind === "server.cfg" && serverCfgView === "simple" ? (
+          <ServerCfgSimpleFormFields form={form} onChange={updateForm} />
         ) : (
           <textarea
             className="min-h-[400px] w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
@@ -1005,6 +1067,163 @@ function ConfigTab({ serverId, serverStatus }: { serverId: number; serverStatus:
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ServerCfgSimpleFormFields({
+  form,
+  onChange,
+}: {
+  form: ServerCfgSimpleForm;
+  onChange: <K extends keyof ServerCfgSimpleForm>(
+    key: K,
+    value: ServerCfgSimpleForm[K],
+  ) => void;
+}) {
+  return (
+    <div className="mx-auto flex max-w-xl flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="cfg-hostname">Server name</Label>
+        <Input
+          id="cfg-hostname"
+          value={form.hostname}
+          onChange={(e) => onChange("hostname", e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">Shown in the multiplayer server browser.</p>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="cfg-password">Join password</Label>
+        <Input
+          id="cfg-password"
+          type="password"
+          autoComplete="new-password"
+          value={form.password}
+          onChange={(e) => onChange("password", e.target.value)}
+          placeholder="Leave empty for a public server"
+        />
+        <p className="text-xs text-muted-foreground">Required for players to join. Empty = public.</p>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="cfg-passwordAdmin">Admin password</Label>
+        <Input
+          id="cfg-passwordAdmin"
+          type="password"
+          autoComplete="new-password"
+          value={form.passwordAdmin}
+          onChange={(e) => onChange("passwordAdmin", e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          Used with <code>#login</code> in chat for admin commands.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="cfg-serverCommandPassword">Server command password</Label>
+        <Input
+          id="cfg-serverCommandPassword"
+          type="password"
+          autoComplete="new-password"
+          value={form.serverCommandPassword}
+          onChange={(e) => onChange("serverCommandPassword", e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          Optional password for server-side scripting commands.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="cfg-maxPlayers">Max players</Label>
+        <Input
+          id="cfg-maxPlayers"
+          type="number"
+          min={1}
+          max={255}
+          value={form.maxPlayers}
+          onChange={(e) =>
+            onChange("maxPlayers", Math.max(1, Number(e.target.value) || 1))
+          }
+        />
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="cfg-verifySignatures">Signature check</Label>
+        <Select
+          id="cfg-verifySignatures"
+          value={String(form.verifySignatures)}
+          onChange={(e) => onChange("verifySignatures", Number(e.target.value))}
+        >
+          <option value="0">Off — allow any mods</option>
+          <option value="1">Weak — warn on mismatch</option>
+          <option value="2">Full — kick unsigned / mismatched mods</option>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Full is recommended for public servers.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="cfg-allowedFilePatching">File patching</Label>
+        <Select
+          id="cfg-allowedFilePatching"
+          value={String(form.allowedFilePatching)}
+          onChange={(e) => onChange("allowedFilePatching", Number(e.target.value))}
+        >
+          <option value="0">No one</option>
+          <option value="1">Headless clients only</option>
+          <option value="2">Anyone</option>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Usually leave as &quot;No one&quot; unless you need -filePatching.
+        </p>
+      </div>
+
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={form.BattlEye}
+          onChange={(e) => onChange("BattlEye", e.target.checked)}
+        />
+        <span>
+          <span className="font-medium">BattlEye</span>
+          <span className="block text-xs text-muted-foreground">
+            Anti-cheat. Keep enabled for public servers.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={form.persistent}
+          onChange={(e) => onChange("persistent", e.target.checked)}
+        />
+        <span>
+          <span className="font-medium">Persistent</span>
+          <span className="block text-xs text-muted-foreground">
+            Keep the mission running when the last player leaves.
+          </span>
+        </span>
+      </label>
+
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={form.drawingOnMap}
+          onChange={(e) => onChange("drawingOnMap", e.target.checked)}
+        />
+        <span>
+          <span className="font-medium">Map drawing</span>
+          <span className="block text-xs text-muted-foreground">
+            Allow players to draw on the in-game map.
+          </span>
+        </span>
+      </label>
+    </div>
   );
 }
 
