@@ -215,9 +215,3 @@ Build the frontend first (`task web:build` or `task build`).
 
 **CGO / sqlite build errors**  
 Install a C toolchain (e.g. gcc) and ensure `CGO_ENABLED=1`.
-
----
-
-## Contributing
-
-Issues and pull requests are welcome, especially for frontend improvements. Run `task lint` before submitting.
