@@ -180,7 +180,11 @@ export interface ProcessMetrics {
   cpuPercent: number;
   /** Logical CPU count (for gauge scale: full = 100% × cpuCount). */
   cpuCount: number;
+  /** Overall host CPU utilization 0–100 (all cores averaged). */
+  hostCpuPercent: number;
   memoryBytes: number;
+  /** Host memory currently in use (all processes). */
+  memoryUsedBytes: number;
   /** Host physical/virtual memory total for RAM gauge. */
   memoryTotalBytes: number;
   threads: number;

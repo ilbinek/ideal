@@ -130,7 +130,7 @@ func (m *Manager) ListHeadless(serverID int) ([]HeadlessStatusSnapshot, error) {
 	m.ensureHCMap()
 
 	out := make([]HeadlessStatusSnapshot, 0, len(clients))
-	recvBps, sentBps := sampleHostNet()
+	host := sampleHostContext()
 	for _, c := range clients {
 		snap := HeadlessStatusSnapshot{
 			ServerID:    c.ServerID,
@@ -150,7 +150,7 @@ func (m *Manager) ListHeadless(serverID int) ([]HeadlessStatusSnapshot, error) {
 				snap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 			}
 			snap.Metrics = sampleProcess(inst.pid)
-			attachHostNet(snap.Metrics, recvBps, sentBps)
+			attachHostContext(snap.Metrics, host)
 		}
 		out = append(out, snap)
 	}

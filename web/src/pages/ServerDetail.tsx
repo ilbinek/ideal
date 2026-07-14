@@ -260,23 +260,28 @@ function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
   if (!metrics) return null;
 
   const cpuFill = cpuGaugeFill(metrics.cpuPercent, metrics.cpuCount);
+  const hostCpuFill = Math.min(1, Math.max(0, (metrics.hostCpuPercent ?? 0) / 100));
   const memFill = memoryGaugeFill(metrics.memoryBytes, metrics.memoryTotalBytes);
+  const hostMemFill = memoryGaugeFill(metrics.memoryUsedBytes, metrics.memoryTotalBytes);
   const memPct = formatMemoryOfHost(metrics.memoryBytes, metrics.memoryTotalBytes);
+  const hostMemPct = formatMemoryOfHost(metrics.memoryUsedBytes, metrics.memoryTotalBytes);
   const cores = metrics.cpuCount > 0 ? metrics.cpuCount : 1;
 
   return (
     <div className="flex flex-wrap items-end gap-4 sm:gap-6">
       <HalfCircleGauge
         value={cpuFill}
+        hostValue={hostCpuFill}
         label="CPU"
         display={formatCpuPercent(metrics.cpuPercent)}
-        detail={`of ${cores}×100%`}
+        detail={`host ${formatCpuPercent(metrics.hostCpuPercent)} · ${cores}c`}
       />
       <HalfCircleGauge
         value={memFill}
+        hostValue={hostMemFill}
         label="Memory"
         display={memPct}
-        detail={`${formatBytes(metrics.memoryBytes)} / ${formatBytes(metrics.memoryTotalBytes)}`}
+        detail={`host ${hostMemPct} · ${formatBytes(metrics.memoryBytes)}`}
       />
       <HalfCircleGauge
         value={recv / recvPeak}
@@ -314,7 +319,7 @@ function LiveMetricsCard({ serverId }: { serverId: number }) {
         <CardDescription>
           Live stats for PID {live.pid > 0 ? live.pid : "—"}
           {live.uptime > 0 ? ` · ${live.uptime}s uptime` : ""}
-          {" · "}network is host-wide
+          {" · "}grey = host total · network is host-wide
         </CardDescription>
       </CardHeader>
       <CardContent>

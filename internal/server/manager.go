@@ -123,7 +123,7 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 	m.ensureHCMap()
 
 	var snaps []StatusSnapshot
-	recvBps, sentBps := sampleHostNet()
+	host := sampleHostContext()
 	for _, s := range servers {
 		snap := StatusSnapshot{
 			ID:        s.ID,
@@ -141,7 +141,7 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 				snap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 			}
 			snap.Metrics = sampleProcess(inst.pid)
-			attachHostNet(snap.Metrics, recvBps, sentBps)
+			attachHostContext(snap.Metrics, host)
 		}
 		for _, c := range hcByServer[s.ID] {
 			hcSnap := HeadlessStatusSnapshot{
@@ -162,7 +162,7 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 					hcSnap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 				}
 				hcSnap.Metrics = sampleProcess(inst.pid)
-				attachHostNet(hcSnap.Metrics, recvBps, sentBps)
+				attachHostContext(hcSnap.Metrics, host)
 			}
 			snap.Headless = append(snap.Headless, hcSnap)
 		}
