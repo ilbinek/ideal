@@ -6,8 +6,15 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Match a scalar assignment line, optionally followed by an inline // comment.
+ * Captures: [1]=leading indent, [2]=trailing whitespace + optional // comment.
+ */
 function assignmentLineRe(key: string): RegExp {
-  return new RegExp(`^(\\s*)${escapeRegExp(key)}\\s*=\\s*[^;]*;\\s*$`, "im");
+  return new RegExp(
+    `^(\\s*)${escapeRegExp(key)}\\s*=\\s*[^;\\n]*;(\\s*(?://[^\\n]*)?)\\s*$`,
+    "gim",
+  );
 }
 
 /** Read a quoted string assignment: key = "value"; */
@@ -52,7 +59,9 @@ function formatValue(value: string | number | boolean, kind: CfgValueKind): stri
 
 /**
  * Replace an existing `key = ...;` line, or append one if missing.
- * Preserves unrelated lines (comments, arrays, custom keys).
+ * Preserves unrelated lines and inline // comments after the semicolon.
+ * If the key appears more than once (e.g. from earlier append bugs), all
+ * matching assignment lines are updated to the new value.
  */
 export function setCfgValue(
   content: string,
@@ -61,14 +70,16 @@ export function setCfgValue(
   kind: CfgValueKind,
 ): string {
   const formatted = formatValue(value, kind);
-  const line = `${key} = ${formatted};`;
+  const assignment = `${key} = ${formatted};`;
   const re = assignmentLineRe(key);
+  // Use match, not next!==content: unchanged values must not append duplicates.
   if (re.test(content)) {
-    return content.replace(re, `$1${line}`);
+    re.lastIndex = 0;
+    return content.replace(re, `$1${assignment}$2`);
   }
   const trimmed = content.replace(/\s*$/, "");
   const sep = trimmed.length === 0 || trimmed.endsWith("\n") ? "" : "\n";
-  return `${trimmed}${sep}${line}\n`;
+  return `${trimmed}${sep}${assignment}\n`;
 }
 
 export type ServerCfgSimpleForm = {
