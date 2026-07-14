@@ -167,11 +167,18 @@ export interface HeadlessClientSnapshot {
   activeRpt: string;
   uptime: number;
   startedAt?: string;
+  metrics?: ProcessMetrics;
 }
 
 export interface HeadlessClientsResponse {
   count: number;
   clients: HeadlessClientSnapshot[];
+}
+
+export interface ProcessMetrics {
+  cpuPercent: number;
+  memoryBytes: number;
+  threads: number;
 }
 
 export interface ServerStatusSnapshot {
@@ -183,6 +190,7 @@ export interface ServerStatusSnapshot {
   activeRpt: string;
   uptime: number;
   startedAt?: string;
+  metrics?: ProcessMetrics;
   headless?: HeadlessClientSnapshot[];
 }
 

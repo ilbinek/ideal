@@ -16,7 +16,7 @@ import {
 import { api, ApiError } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatBytes, formatCpuPercent } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -38,7 +38,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
-import type { HeadlessClientSnapshot, ServerMod, ServerStatus } from "@/lib/types";
+import type {
+  HeadlessClientSnapshot,
+  ProcessMetrics,
+  ServerMod,
+  ServerStatus,
+} from "@/lib/types";
 import {
   applyServerCfgForm,
   defaultServerCfgForm,
@@ -237,6 +242,26 @@ export function ServerDetail() {
   );
 }
 
+function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
+  if (!metrics) return null;
+  return (
+    <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+      <div>
+        <span className="text-muted-foreground">CPU </span>
+        <span className="font-medium tabular-nums">{formatCpuPercent(metrics.cpuPercent)}</span>
+      </div>
+      <div>
+        <span className="text-muted-foreground">Memory </span>
+        <span className="font-medium tabular-nums">{formatBytes(metrics.memoryBytes)}</span>
+      </div>
+      <div>
+        <span className="text-muted-foreground">Threads </span>
+        <span className="font-medium tabular-nums">{metrics.threads}</span>
+      </div>
+    </div>
+  );
+}
+
 function OverviewTab({
   serverId,
   srv,
@@ -255,6 +280,11 @@ function OverviewTab({
   };
 }) {
   const queryClient = useQueryClient();
+  const { statusFor } = useServers();
+  const live = statusFor(serverId);
+  const liveStatus = live?.status;
+  const showMetrics =
+    liveStatus === "running" || liveStatus === "starting" || liveStatus === "stopping";
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
   const modsets = useQuery({ queryKey: ["modsets"], queryFn: () => api.getModsets() });
   const launch = useQuery({
@@ -329,7 +359,23 @@ function OverviewTab({
   const preferredBinary = binaries.data?.preferred ?? "";
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="flex flex-col gap-4">
+      {showMetrics && live?.metrics && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Process</CardTitle>
+            <CardDescription>
+              Live stats for PID {live.pid > 0 ? live.pid : "—"}
+              {live.uptime > 0 ? ` · ${live.uptime}s uptime` : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ProcessMetricsStrip metrics={live.metrics} />
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Settings</CardTitle>
@@ -496,6 +542,7 @@ function OverviewTab({
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
@@ -1797,6 +1844,9 @@ function HeadlessTab({
                 <TableHead>Profile</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>PID</TableHead>
+                <TableHead>CPU</TableHead>
+                <TableHead>Memory</TableHead>
+                <TableHead>Threads</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -1813,6 +1863,15 @@ function HeadlessTab({
                     <TableCell>{statusBadge(c.status)}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {c.pid > 0 ? c.pid : "—"}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-muted-foreground">
+                      {running ? formatCpuPercent(c.metrics?.cpuPercent) : "—"}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-muted-foreground">
+                      {running ? formatBytes(c.metrics?.memoryBytes) : "—"}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-muted-foreground">
+                      {running && c.metrics ? c.metrics.threads : "—"}
                     </TableCell>
                     <TableCell className="text-right">
                       <div
@@ -1849,7 +1908,7 @@ function HeadlessTab({
               })}
               {!mergedClients.length && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-muted-foreground">
+                  <TableCell colSpan={7} className="text-muted-foreground">
                     No headless clients configured. Set a count above to create slots.
                   </TableCell>
                 </TableRow>

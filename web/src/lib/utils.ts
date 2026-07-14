@@ -18,3 +18,18 @@ export function formatDate(iso: string | undefined): string {
     minute: "2-digit",
   });
 }
+
+/** Format byte counts as MiB/GiB for process memory display. */
+export function formatBytes(bytes: number | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return "—";
+  const gib = bytes / (1024 * 1024 * 1024);
+  if (gib >= 1) return `${gib.toFixed(2)} GiB`;
+  const mib = bytes / (1024 * 1024);
+  return `${mib.toFixed(0)} MiB`;
+}
+
+/** Format process CPU percent (may exceed 100 on multi-core). */
+export function formatCpuPercent(pct: number | undefined): string {
+  if (pct == null || !Number.isFinite(pct)) return "—";
+  return `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
+}

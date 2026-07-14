@@ -20,14 +20,15 @@ type hcKey struct {
 
 // HeadlessStatusSnapshot is runtime status for one HC slot.
 type HeadlessStatusSnapshot struct {
-	ServerID    int       `json:"serverId"`
-	Slot        int       `json:"slot"`
-	ProfileName string    `json:"profileName"`
-	Status      string    `json:"status"`
-	PID         int       `json:"pid"`
-	ActiveRPT   string    `json:"activeRpt"`
-	Uptime      int64     `json:"uptime"`
-	StartedAt   time.Time `json:"startedAt,omitempty"`
+	ServerID    int             `json:"serverId"`
+	Slot        int             `json:"slot"`
+	ProfileName string          `json:"profileName"`
+	Status      string          `json:"status"`
+	PID         int             `json:"pid"`
+	ActiveRPT   string          `json:"activeRpt"`
+	Uptime      int64           `json:"uptime"`
+	StartedAt   time.Time       `json:"startedAt,omitempty"`
+	Metrics     *ProcessMetrics `json:"metrics,omitempty"`
 }
 
 type runningHeadless struct {
@@ -147,6 +148,7 @@ func (m *Manager) ListHeadless(serverID int) ([]HeadlessStatusSnapshot, error) {
 			if !inst.startedAt.IsZero() {
 				snap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 			}
+			snap.Metrics = sampleProcess(inst.pid)
 		}
 		out = append(out, snap)
 	}
@@ -467,6 +469,7 @@ func (m *Manager) watchHeadless(serverID, slot int, gen uint64) {
 			// exited
 		} else if processRunning(pid) {
 			consecutiveDead = 0
+			m.broadcast()
 			continue
 		}
 

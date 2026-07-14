@@ -22,6 +22,7 @@ type StatusSnapshot struct {
 	ActiveRPT string                   `json:"activeRpt"`
 	Uptime    int64                    `json:"uptime"` // seconds, 0 if not running
 	StartedAt time.Time                `json:"startedAt,omitempty"`
+	Metrics   *ProcessMetrics          `json:"metrics,omitempty"`
 	Headless  []HeadlessStatusSnapshot `json:"headless,omitempty"`
 }
 
@@ -138,6 +139,7 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 			if !inst.startedAt.IsZero() {
 				snap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 			}
+			snap.Metrics = sampleProcess(inst.pid)
 		}
 		for _, c := range hcByServer[s.ID] {
 			hcSnap := HeadlessStatusSnapshot{
@@ -157,11 +159,13 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 				if !inst.startedAt.IsZero() {
 					hcSnap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 				}
+				hcSnap.Metrics = sampleProcess(inst.pid)
 			}
 			snap.Headless = append(snap.Headless, hcSnap)
 		}
 		snaps = append(snaps, snap)
 	}
+	pruneMetricsCache()
 	return AllStatusSnapshot{Servers: snaps}
 }
 
@@ -558,10 +562,12 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 		if proc != nil && proc.exited() {
 			if IsPortInUse(srv.GamePort) {
 				consecutiveDead = 0
+				m.broadcast()
 				continue
 			}
 		} else if ServerAlive(pid, srv.GamePort) {
 			consecutiveDead = 0
+			m.broadcast()
 			continue
 		}
 
