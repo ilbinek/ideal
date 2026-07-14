@@ -48,7 +48,7 @@ export function HalfCircleGauge({
   const hostOffset = host != null ? ARC_LEN * (1 - host) : 0;
 
   return (
-    <div className={cn("flex w-[7.5rem] flex-col items-center", className)}>
+    <div className={cn("flex w-[8.5rem] flex-col items-center", className)}>
       <div className="relative w-full">
         <svg viewBox="0 0 100 58" className="h-auto w-full" aria-hidden>
           <path
@@ -87,7 +87,7 @@ export function HalfCircleGauge({
             {display}
           </span>
           {detail ? (
-            <span className="mt-0.5 max-w-full truncate text-[10px] text-muted-foreground tabular-nums">
+            <span className="mt-0.5 max-w-[9rem] text-center text-[10px] leading-tight text-muted-foreground tabular-nums">
               {detail}
             </span>
           ) : null}

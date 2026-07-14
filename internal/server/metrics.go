@@ -152,6 +152,10 @@ func sampleHostContext() hostContext {
 	if vm, err := mem.VirtualMemory(); err == nil && vm != nil {
 		memTotal = vm.Total
 		memUsed = vm.Used
+		// Some platforms report Used=0; derive from available when needed.
+		if memUsed == 0 && memTotal > 0 && vm.Available > 0 && vm.Available <= memTotal {
+			memUsed = memTotal - vm.Available
+		}
 	}
 
 	return hostContext{

@@ -281,7 +281,7 @@ function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
         hostValue={hostMemFill}
         label="Memory"
         display={memPct}
-        detail={`host ${hostMemPct} · ${formatBytes(metrics.memoryBytes)}`}
+        detail={`host ${formatBytes(metrics.memoryUsedBytes)} / ${formatBytes(metrics.memoryTotalBytes)} (${hostMemPct})`}
       />
       <HalfCircleGauge
         value={recv / recvPeak}
