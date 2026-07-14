@@ -9,9 +9,9 @@ type HalfCircleGaugeProps = {
    */
   hostValue?: number;
   label: string;
-  /** Primary value shown in the center (e.g. "42%"). */
+  /** Primary value shown in the center of the arc (keep short, e.g. "42%"). */
   display: string;
-  /** Optional secondary line under display. */
+  /** Secondary line below the label — outside the arc so long text can wrap. */
   detail?: string;
   className?: string;
 };
@@ -33,6 +33,7 @@ function clamp01(n: number): number {
 /**
  * Animated semicircle gauge. Arc fills left→right as value goes 0→1.
  * Optional hostValue draws a grey underlay for total system usage.
+ * Only `display` sits inside the arc; `detail` is rendered under the label.
  */
 export function HalfCircleGauge({
   value,
@@ -48,7 +49,7 @@ export function HalfCircleGauge({
   const hostOffset = host != null ? ARC_LEN * (1 - host) : 0;
 
   return (
-    <div className={cn("flex w-[8.5rem] flex-col items-center", className)}>
+    <div className={cn("flex w-[7.5rem] flex-col items-center", className)}>
       <div className="relative w-full">
         <svg viewBox="0 0 100 58" className="h-auto w-full" aria-hidden>
           <path
@@ -82,18 +83,18 @@ export function HalfCircleGauge({
             className="text-primary transition-[stroke-dashoffset] duration-700 ease-out"
           />
         </svg>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center pb-0.5">
+        <div className="pointer-events-none absolute inset-x-0 bottom-[2px] flex justify-center">
           <span className="text-lg font-semibold tabular-nums leading-none tracking-tight">
             {display}
           </span>
-          {detail ? (
-            <span className="mt-0.5 max-w-[9rem] text-center text-[10px] leading-tight text-muted-foreground tabular-nums">
-              {detail}
-            </span>
-          ) : null}
         </div>
       </div>
       <span className="mt-1 text-xs font-medium text-muted-foreground">{label}</span>
+      {detail ? (
+        <span className="mt-0.5 w-full text-center text-[10px] leading-snug text-muted-foreground tabular-nums">
+          {detail}
+        </span>
+      ) : null}
     </div>
   );
 }

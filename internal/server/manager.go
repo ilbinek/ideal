@@ -61,10 +61,12 @@ var Default = &Manager{
 
 var nextInstanceGen uint64
 
-// Init reconciles DB state on startup.
+// Init reconciles DB state on startup and re-adopts still-running processes
+// so metrics, watchers, and Stop keep working across Ideal restarts.
 func Init() {
 	ReconcileStatuses()
 	ReconcileHeadlessStatuses()
+	Default.adoptOrphans()
 }
 
 // ReconcileStatuses settles orphaned DB statuses on startup. Servers still bound
@@ -105,6 +107,101 @@ func ReconcileStatuses() {
 	}
 }
 
+// adoptOrphans re-attaches Ideal to Arma / headless PIDs that survived a restart.
+// Without this, DB status stays "running" but metrics and watchers never resume.
+func (m *Manager) adoptOrphans() {
+	servers, err := database.GetServers()
+	if err != nil {
+		log.Printf("[SERVER] failed to adopt orphans: %v", err)
+		return
+	}
+
+	m.mu.Lock()
+	m.ensureHCMap()
+	var adoptedServers []struct {
+		id  int
+		gen uint64
+	}
+	for _, s := range servers {
+		if _, ok := m.instances[s.ID]; ok {
+			continue
+		}
+		if s.Status != database.ServerStatusRunning && s.Status != database.ServerStatusStarting {
+			continue
+		}
+		if s.PID <= 0 || !processRunning(s.PID) {
+			continue
+		}
+		gen := atomic.AddUint64(&nextInstanceGen, 1)
+		m.instances[s.ID] = &runningInstance{
+			serverID:  s.ID,
+			gen:       gen,
+			pid:       s.PID,
+			proc:      adoptProcess(s.PID),
+			startedAt: time.Now(),
+			rptPath:   s.ActiveRPT,
+		}
+		adoptedServers = append(adoptedServers, struct {
+			id  int
+			gen uint64
+		}{s.ID, gen})
+		if s.Status != database.ServerStatusRunning {
+			_ = database.UpdateServerStatus(s.ID, database.ServerStatusRunning, s.PID, s.ActiveRPT)
+		}
+		log.Printf("[SERVER] adopted orphan pid=%d server=%d (%s)", s.PID, s.ID, s.Slug)
+	}
+
+	clients, _ := database.GetAllHeadlessClients()
+	var adoptedHC []struct {
+		serverID int
+		slot     int
+		gen      uint64
+	}
+	for _, c := range clients {
+		key := hcKey{c.ServerID, c.Slot}
+		if _, ok := m.headless[key]; ok {
+			continue
+		}
+		if c.Status != database.ServerStatusRunning && c.Status != database.ServerStatusStarting {
+			continue
+		}
+		if c.PID <= 0 || !processRunning(c.PID) {
+			continue
+		}
+		gen := atomic.AddUint64(&nextInstanceGen, 1)
+		m.headless[key] = &runningHeadless{
+			serverID:    c.ServerID,
+			slot:        c.Slot,
+			gen:         gen,
+			pid:         c.PID,
+			proc:        adoptProcess(c.PID),
+			startedAt:   time.Now(),
+			rptPath:     c.ActiveRPT,
+			profileName: c.ProfileName,
+		}
+		adoptedHC = append(adoptedHC, struct {
+			serverID int
+			slot     int
+			gen      uint64
+		}{c.ServerID, c.Slot, gen})
+		if c.Status != database.ServerStatusRunning {
+			_ = database.UpdateHeadlessStatus(c.ServerID, c.Slot, database.ServerStatusRunning, c.PID, c.ActiveRPT)
+		}
+		log.Printf("[HC] adopted orphan pid=%d server=%d slot=%d", c.PID, c.ServerID, c.Slot)
+	}
+	m.mu.Unlock()
+
+	for _, a := range adoptedServers {
+		go m.watchServer(a.id, a.gen)
+	}
+	for _, a := range adoptedHC {
+		go m.watchHeadless(a.serverID, a.slot, a.gen)
+	}
+	if len(adoptedServers) > 0 || len(adoptedHC) > 0 {
+		m.broadcast()
+	}
+}
+
 // Snapshot returns current status for all servers.
 func (m *Manager) Snapshot() AllStatusSnapshot {
 	servers, err := database.GetServers()
@@ -142,6 +239,11 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 			}
 			snap.Metrics = sampleProcess(inst.pid)
 			attachHostContext(snap.Metrics, host)
+		} else if (s.Status == database.ServerStatusRunning || s.Status == database.ServerStatusStarting) &&
+			s.PID > 0 && processRunning(s.PID) {
+			// DB says running but not yet tracked (or adopt missed) — still expose metrics.
+			snap.Metrics = sampleProcess(s.PID)
+			attachHostContext(snap.Metrics, host)
 		}
 		for _, c := range hcByServer[s.ID] {
 			hcSnap := HeadlessStatusSnapshot{
@@ -162,6 +264,10 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 					hcSnap.Uptime = int64(time.Since(inst.startedAt).Seconds())
 				}
 				hcSnap.Metrics = sampleProcess(inst.pid)
+				attachHostContext(hcSnap.Metrics, host)
+			} else if (c.Status == database.ServerStatusRunning || c.Status == database.ServerStatusStarting) &&
+				c.PID > 0 && processRunning(c.PID) {
+				hcSnap.Metrics = sampleProcess(c.PID)
 				attachHostContext(hcSnap.Metrics, host)
 			}
 			snap.Headless = append(snap.Headless, hcSnap)

@@ -264,7 +264,6 @@ function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
   const memFill = memoryGaugeFill(metrics.memoryBytes, metrics.memoryTotalBytes);
   const hostMemFill = memoryGaugeFill(metrics.memoryUsedBytes, metrics.memoryTotalBytes);
   const memPct = formatMemoryOfHost(metrics.memoryBytes, metrics.memoryTotalBytes);
-  const hostMemPct = formatMemoryOfHost(metrics.memoryUsedBytes, metrics.memoryTotalBytes);
   const cores = metrics.cpuCount > 0 ? metrics.cpuCount : 1;
 
   return (
@@ -281,7 +280,7 @@ function ProcessMetricsStrip({ metrics }: { metrics?: ProcessMetrics }) {
         hostValue={hostMemFill}
         label="Memory"
         display={memPct}
-        detail={`host ${formatBytes(metrics.memoryUsedBytes)} / ${formatBytes(metrics.memoryTotalBytes)} (${hostMemPct})`}
+        detail={`${formatBytes(metrics.memoryUsedBytes)} / ${formatBytes(metrics.memoryTotalBytes)} host`}
       />
       <HalfCircleGauge
         value={recv / recvPeak}
