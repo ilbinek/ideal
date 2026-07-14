@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import type {
+  GameServer,
   HeadlessClientSnapshot,
   ProcessMetrics,
   ServerMod,
@@ -239,7 +240,7 @@ export function ServerDetail() {
       {tab === "headless" && (
         <HeadlessTab serverId={serverId} serverRunning={isRunning} />
       )}
-      {tab === "missions" && <MissionsTab serverId={serverId} />}
+      {tab === "missions" && <MissionsTab serverId={serverId} srv={srv} />}
     </div>
   );
 }
@@ -1773,7 +1774,13 @@ function isPboFile(file: File): boolean {
   return file.name.toLowerCase().endsWith(".pbo");
 }
 
-function MissionsTab({ serverId }: { serverId: number }) {
+function MissionsTab({
+  serverId,
+  srv,
+}: {
+  serverId: number;
+  srv: GameServer;
+}) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const missions = useQuery({
@@ -1784,6 +1791,35 @@ function MissionsTab({ serverId }: { serverId: number }) {
   const [drag, setDrag] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState("");
+
+  const httpServe = useMutation({
+    mutationFn: (enabled: boolean) => api.setMissionHttpServe(serverId, enabled),
+    onSuccess: (res) => {
+      queryClient.setQueryData<GameServer>(["servers", serverId], (prev) =>
+        prev
+          ? {
+              ...prev,
+              missionHttpServe: res.missionHttpServe,
+              missionHttpPath: res.missionHttpPath,
+            }
+          : prev,
+      );
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.success(
+        res.missionHttpServe
+          ? "HTTP mission serving enabled"
+          : "HTTP mission serving disabled",
+      );
+    },
+    onError: (e) =>
+      toast.error(
+        "Failed to update HTTP serving",
+        e instanceof ApiError ? e.message : undefined,
+      ),
+  });
+
+  const missionHttpPath = srv.missionHttpPath || `${srv.slug}/missions/`;
 
   const missionNames = useMemo(
     () => new Set((missions.data ?? []).map((m) => m.name)),
@@ -1976,6 +2012,46 @@ function MissionsTab({ serverId }: { serverId: number }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">HTTP mission download</CardTitle>
+          <CardDescription>
+            Serve mission .pbo files over HTTP so Arma clients can download them
+            faster. Set{" "}
+            <code className="text-xs">missionHTTPDownloadBaseURL</code> in
+            server.cfg yourself — prepend your public address to the path below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4 rounded border-input"
+              checked={!!srv.missionHttpServe}
+              disabled={httpServe.isPending}
+              onChange={(e) => httpServe.mutate(e.target.checked)}
+            />
+            Enable public HTTP mission serving
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="rounded bg-muted px-2 py-1 text-sm">
+              {missionHttpPath}
+            </code>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void navigator.clipboard.writeText(missionHttpPath);
+                toast.success("Path copied");
+              }}
+            >
+              <Copy className="size-3.5" /> Copy
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       <div
         className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-8 transition-colors ${
           drag ? "border-primary bg-primary/5" : "border-border"

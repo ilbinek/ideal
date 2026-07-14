@@ -115,6 +115,8 @@ export interface GameServer {
   extraLaunchParams: string;
   enabledCdlcs: string[];
   headlessCount: number;
+  missionHttpServe: boolean;
+  missionHttpPath: string;
   status: ServerStatus;
   pid: number;
   activeRpt: string;

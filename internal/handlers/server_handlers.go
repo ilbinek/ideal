@@ -1219,3 +1219,70 @@ func DeleteMissionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, server.DeleteMissions(srv.Slug, body.Names))
 }
+
+// PutMissionHttpServeHandler toggles public HTTP mission serving for a server.
+func PutMissionHttpServeHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	if _, err := database.GetServer(id); err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := database.SetMissionHttpServe(id, body.Enabled); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update setting")
+		return
+	}
+	srv, err := database.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reload server")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":               true,
+		"missionHttpServe": srv.MissionHttpServe,
+		"missionHttpPath":  srv.MissionHttpPath,
+	})
+}
+
+// PublicMissionDownloadHandler serves a mission PBO for Arma HTTP mission download.
+// Unauthenticated; only responds when mission_http_serve is enabled for the slug.
+func PublicMissionDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	name := r.PathValue("name")
+	if slug == "" || name == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	srv, err := database.GetServerBySlug(slug)
+	if err != nil || !srv.MissionHttpServe {
+		http.NotFound(w, r)
+		return
+	}
+
+	f, filename, err := server.OpenMissionForDownload(srv.Slug, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	http.ServeContent(w, r, filename, info.ModTime(), f)
+}

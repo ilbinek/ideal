@@ -387,6 +387,14 @@ export const api = {
 
   // Missions
   listMissions: (id: number) => request<LogEntry[]>(`/api/servers/${id}/missions`),
+  setMissionHttpServe: (id: number, enabled: boolean) =>
+    request<{ ok: boolean; missionHttpServe: boolean; missionHttpPath: string }>(
+      `/api/servers/${id}/missions/http-serve`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      },
+    ),
   uploadMission: (id: number, file: File) => {
     const form = new FormData();
     form.append("mission", file);

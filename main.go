@@ -50,6 +50,9 @@ func main() {
 	// JSON REST API
 	mux.Handle("/api/", handlers.APIHandler())
 
+	// Public Arma mission HTTP download (no auth; gated per-server)
+	mux.HandleFunc("GET /{slug}/missions/{name}", handlers.PublicMissionDownloadHandler)
+
 	// Embedded React SPA (with client-side routing fallback)
 	mux.Handle("/", web.Handler())
 

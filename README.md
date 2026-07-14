@@ -1,8 +1,8 @@
 # IDEAL
 
-**ilbinek's Dedicated Environment for Arma**
+**ilbinek's Dedicated Environment for Arma on Linux**
 
-A web-based Arma 3 **dedicated server manager**: install server branches, run and stop server instances, download Workshop mods, import launcher modsets, and generate A3Sync repositories. Runs on Linux and Windows.
+A web-based Arma 3 **dedicated server manager for linux**: install server branches, run and stop server instances, download Workshop mods, import launcher modsets, and generate A3Sync repositories. Runs on Linux.
 
 ---
 
@@ -48,9 +48,6 @@ A Steam Web API key (Settings) is used for update checks.
    ```bash
    # Linux
    ./ideal
-
-   # Windows
-   ideal.exe
    ```
 4. Open `http://localhost:8080` (or the port in `config.json`)
 5. Log in with the password you set
@@ -121,7 +118,7 @@ For **managed servers**, `.bikey` files are copied into `servers/<slug>/keys/` a
 2. Click **Generate A3Sync Folder**
 3. Ideal creates `./a3sync` with file-level symlinks to downloaded mods
 
-Point your A3Sync repository at that directory. On Windows, creating symlinks may require elevated privileges.
+Point your A3Sync repository at that directory.
 
 ---
 
@@ -168,7 +165,7 @@ task install
 | `task web:build` | Build the SPA into `web/dist` |
 | `task build` | Build SPA (if needed) + binary → `dist/ideal` |
 | `task run` | Build if sources changed, then run `dist/ideal` |
-| `task build:all` | Cross-compile Linux/Windows amd64/arm64 into `dist/` |
+| `task build:all` | Cross-compile Linux amd64/arm64 into `dist/` |
 | `task lint` | `go vet` + frontend typecheck |
 | `task clean` | Remove `web/dist` and `dist` |
 
@@ -215,9 +212,6 @@ Ideal reconciles statuses on startup. If a process is gone, status should settle
 
 **Empty or broken UI after `go build`**  
 Build the frontend first (`task web:build` or `task build`).
-
-**A3Sync symlink errors on Windows**  
-Run with privileges that allow creating symlinks, or enable Developer Mode.
 
 **CGO / sqlite build errors**  
 Install a C toolchain (e.g. gcc) and ensure `CGO_ENABLED=1`.

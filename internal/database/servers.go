@@ -42,6 +42,8 @@ type Server struct {
 	ExtraLaunchParams string    `json:"extraLaunchParams"`
 	EnabledCdlcs      []string  `json:"enabledCdlcs"`
 	HeadlessCount     int       `json:"headlessCount"`
+	MissionHttpServe  bool      `json:"missionHttpServe"`
+	MissionHttpPath   string    `json:"missionHttpPath"`
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
 	ActiveRPT         string    `json:"activeRpt"`
@@ -153,6 +155,7 @@ func migrateServerColumns() error {
 		"ALTER TABLE servers ADD COLUMN local_mods_root TEXT DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN headless_count INTEGER DEFAULT 0",
 		"ALTER TABLE servers ADD COLUMN enabled_cdlcs TEXT DEFAULT ''",
+		"ALTER TABLE servers ADD COLUMN mission_http_serve BOOLEAN DEFAULT 0",
 		"ALTER TABLE server_mods ADD COLUMN enabled BOOLEAN DEFAULT 1",
 		"ALTER TABLE server_mods ADD COLUMN source TEXT DEFAULT ''",
 	}
@@ -162,6 +165,11 @@ func migrateServerColumns() error {
 		}
 	}
 	return nil
+}
+
+// MissionHttpPath returns the public path suffix for Arma mission HTTP download.
+func MissionHttpPath(slug string) string {
+	return slug + "/missions/"
 }
 
 func fixPerformanceBranchCode() error {
@@ -386,14 +394,16 @@ func SetBranchInstalled(id int, installed bool) error {
 	return err
 }
 
+const serverSelectCols = `
+		id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
+		COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
+		COALESCE(enabled_cdlcs, ''),
+		COALESCE(headless_count, 0),
+		COALESCE(mission_http_serve, 0),
+		status, pid, COALESCE(active_rpt, ''), created_at, updated_at`
+
 func GetServers() ([]Server, error) {
-	rows, err := db.Query(`
-		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
-		       COALESCE(enabled_cdlcs, ''),
-		       COALESCE(headless_count, 0),
-		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
-		FROM servers ORDER BY name`)
+	rows, err := db.Query(`SELECT ` + serverSelectCols + ` FROM servers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -402,13 +412,7 @@ func GetServers() ([]Server, error) {
 }
 
 func GetServer(id int) (*Server, error) {
-	rows, err := db.Query(`
-		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
-		       COALESCE(enabled_cdlcs, ''),
-		       COALESCE(headless_count, 0),
-		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
-		FROM servers WHERE id = ?`, id)
+	rows, err := db.Query(`SELECT `+serverSelectCols+` FROM servers WHERE id = ?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -423,15 +427,40 @@ func GetServer(id int) (*Server, error) {
 	return &servers[0], nil
 }
 
+func GetServerBySlug(slug string) (*Server, error) {
+	rows, err := db.Query(`SELECT `+serverSelectCols+` FROM servers WHERE slug = ?`, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	servers, err := scanServers(rows)
+	if err != nil || len(servers) == 0 {
+		if err == nil {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	return &servers[0], nil
+}
+
+func SetMissionHttpServe(id int, enabled bool) error {
+	_, err := db.Exec(`
+		UPDATE servers SET mission_http_serve = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`, enabled, id)
+	return err
+}
+
 func scanServers(rows *sql.Rows) ([]Server, error) {
 	var servers []Server
 	for rows.Next() {
 		var s Server
 		var modsetID sql.NullInt64
 		var enabledCdlcs string
+		var missionHttpServe int
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
 			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &enabledCdlcs, &s.HeadlessCount,
+			&missionHttpServe,
 			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -441,6 +470,8 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 			s.ModsetID = &v
 		}
 		s.EnabledCdlcs = DecodeCdlcs(enabledCdlcs)
+		s.MissionHttpServe = missionHttpServe != 0
+		s.MissionHttpPath = MissionHttpPath(s.Slug)
 		servers = append(servers, s)
 	}
 	return servers, rows.Err()
@@ -706,12 +737,7 @@ func GetServerKey(id int) (*ServerKey, error) {
 }
 
 func GetServersUsingPort(gamePort, steamPort int, excludeID int) ([]Server, error) {
-	rows, err := db.Query(`
-		SELECT id, name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
-		       COALESCE(server_binary, ''), COALESCE(extra_launch_params, ''),
-		       COALESCE(enabled_cdlcs, ''),
-		       COALESCE(headless_count, 0),
-		       status, pid, COALESCE(active_rpt, ''), created_at, updated_at
+	rows, err := db.Query(`SELECT `+serverSelectCols+`
 		FROM servers WHERE id != ? AND (game_port = ? OR steam_port = ? OR game_port = ? OR steam_port = ?)`,
 		excludeID, gamePort, steamPort, steamPort, gamePort,
 	)
