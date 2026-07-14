@@ -1,0 +1,78 @@
+# Taskfile for gosteam. Install go-task: https://taskfile.dev/installation/
+# Commands run under go-task's built-in POSIX shell, so they work the same on
+# Windows, Linux, and macOS.
+version: '3'
+
+vars:
+  BINARY: gosteam
+  PKG: ./cmd/gosteam
+  BIN_DIR: bin
+  DIST_DIR: dist
+  LDFLAGS: -s -w
+
+tasks:
+  default:
+    desc: Build for the current platform
+    deps: [build]
+
+  build:
+    desc: Build for the current platform into ./bin
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BINARY}}{{if eq OS "windows"}}.exe{{end}} {{.PKG}}
+    generates:
+      - '{{.BIN_DIR}}/{{.BINARY}}{{if eq OS "windows"}}.exe{{end}}'
+
+  build-all:
+    desc: Cross-compile for windows/linux on amd64/arm64 into ./dist
+    cmds:
+      - task: cross
+        vars: {GOOS: windows, GOARCH: amd64, EXT: .exe}
+      - task: cross
+        vars: {GOOS: windows, GOARCH: arm64, EXT: .exe}
+      - task: cross
+        vars: {GOOS: linux, GOARCH: amd64, EXT: ''}
+      - task: cross
+        vars: {GOOS: linux, GOARCH: arm64, EXT: ''}
+
+  cross:
+    internal: true
+    label: 'cross {{.GOOS}}/{{.GOARCH}}'
+    cmds:
+      - mkdir -p {{.DIST_DIR}}
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.DIST_DIR}}/{{.BINARY}}_{{.GOOS}}_{{.GOARCH}}{{.EXT}} {{.PKG}}
+    env:
+      GOOS: '{{.GOOS}}'
+      GOARCH: '{{.GOARCH}}'
+      CGO_ENABLED: '0'
+
+  run:
+    desc: Build and run (pass args after --, e.g. `task run -- download 450814997`)
+    deps: [build]
+    cmds:
+      - '{{.BIN_DIR}}/{{.BINARY}}{{if eq OS "windows"}}.exe{{end}} {{.CLI_ARGS}}'
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Format sources
+    cmds:
+      - gofmt -w pkg cmd
+
+  tidy:
+    desc: Tidy module dependencies
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - rm -rf {{.BIN_DIR}} {{.DIST_DIR}}

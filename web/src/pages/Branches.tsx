@@ -71,7 +71,8 @@ export function Branches() {
         <div>
           <h1 className="text-2xl font-semibold">Branches</h1>
           <p className="text-sm text-muted-foreground">
-            Central Arma 3 dedicated server installs via SteamCMD.
+            Central Arma 3 dedicated server installs (built-in downloader by default;
+            override in Settings).
           </p>
         </div>
         <Button variant="outline" asChild>

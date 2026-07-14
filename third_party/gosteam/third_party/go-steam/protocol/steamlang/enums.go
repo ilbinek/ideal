@@ -1540,6 +1540,8 @@ const (
 	EMsg_ClientPICSProductInfoResponse                            EMsg = 8904
 	EMsg_ClientPICSAccessTokenRequest                             EMsg = 8905
 	EMsg_ClientPICSAccessTokenResponse                            EMsg = 8906
+	EMsg_ClientPICSPrivateBetaRequest                             EMsg = 8907
+	EMsg_ClientPICSPrivateBetaResponse                            EMsg = 8908
 	EMsg_WorkerProcess                                            EMsg = 9000
 	EMsg_WorkerProcessPingRequest                                 EMsg = 9000
 	EMsg_WorkerProcessPingResponse                                EMsg = 9001
@@ -3433,6 +3435,8 @@ var EMsg_name = map[EMsg]string{
 	8904:  "EMsg_ClientPICSProductInfoResponse",
 	8905:  "EMsg_ClientPICSAccessTokenRequest",
 	8906:  "EMsg_ClientPICSAccessTokenResponse",
+	8907:  "EMsg_ClientPICSPrivateBetaRequest",
+	8908:  "EMsg_ClientPICSPrivateBetaResponse",
 	9000:  "EMsg_WorkerProcess",
 	9001:  "EMsg_WorkerProcessPingResponse",
 	9002:  "EMsg_WorkerProcessShutdown",

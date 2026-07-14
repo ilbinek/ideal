@@ -282,3 +282,92 @@ func toUint32(v any) (uint32, bool) {
 		return 0, false
 	}
 }
+
+// Child returns the nested object under key (case-insensitive), or nil.
+func Child(tree map[string]any, key string) map[string]any {
+	if tree == nil {
+		return nil
+	}
+	for k, v := range tree {
+		if strings.EqualFold(k, key) {
+			if child, ok := v.(map[string]any); ok {
+				return child
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// String returns the string value under key (case-insensitive).
+func String(tree map[string]any, key string) (string, bool) {
+	if tree == nil {
+		return "", false
+	}
+	for k, v := range tree {
+		if !strings.EqualFold(k, key) {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			return t, true
+		case uint32:
+			return strconv.FormatUint(uint64(t), 10), true
+		case uint64:
+			return strconv.FormatUint(t, 10), true
+		default:
+			return "", false
+		}
+	}
+	return "", false
+}
+
+// Uint32 returns the uint32 value under key (case-insensitive, non-recursive).
+func Uint32(tree map[string]any, key string) (uint32, bool) {
+	if tree == nil {
+		return 0, false
+	}
+	for k, v := range tree {
+		if strings.EqualFold(k, key) {
+			return toUint32(v)
+		}
+	}
+	return 0, false
+}
+
+// Uint64 returns the uint64 value under key (case-insensitive, non-recursive).
+func Uint64(tree map[string]any, key string) (uint64, bool) {
+	if tree == nil {
+		return 0, false
+	}
+	for k, v := range tree {
+		if !strings.EqualFold(k, key) {
+			continue
+		}
+		switch t := v.(type) {
+		case uint64:
+			return t, true
+		case uint32:
+			return uint64(t), true
+		case string:
+			n, err := strconv.ParseUint(strings.TrimSpace(t), 10, 64)
+			if err != nil {
+				return 0, false
+			}
+			return n, true
+		default:
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
+// Bool returns a KeyValues boolean under key (case-insensitive).
+func Bool(tree map[string]any, key string) bool {
+	s, ok := String(tree, key)
+	if !ok {
+		return false
+	}
+	s = strings.TrimSpace(strings.ToLower(s))
+	return s == "1" || s == "true" || s == "yes"
+}

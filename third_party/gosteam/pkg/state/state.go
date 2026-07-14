@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	tokensFile    = "tokens.json"
-	installedFile = "installed.json"
+	tokensFile       = "tokens.json"
+	installedFile    = "installed.json"
+	appsInstalledFile = "apps_installed.json"
 	// ManifestCacheDir holds cached manifest blobs ({depotID}_{manifestID}.manifest).
 	ManifestCacheDir = "manifests"
 	// StagingDir holds in-progress file writes before they are moved into place.
@@ -36,9 +37,15 @@ type Token struct {
 type Store struct {
 	dir string
 
-	mu        sync.Mutex
-	tokens    map[string]Token  // username -> token
-	installed map[uint64]uint64 // workshop item (published file) id -> installed manifest id
+	mu            sync.Mutex
+	tokens        map[string]Token  // username -> token
+	installed     map[uint64]uint64 // workshop item (published file) id -> installed manifest id
+	appsInstalled map[string]uint64 // "appID:depotID" -> installed manifest id
+}
+
+// AppDepotKey builds the apps_installed.json key for an app/depot pair.
+func AppDepotKey(appID, depotID uint32) string {
+	return fmt.Sprintf("%d:%d", appID, depotID)
 }
 
 // Open loads (or initializes) the state store rooted at dir, creating the
@@ -51,14 +58,18 @@ func Open(dir string) (*Store, error) {
 	}
 
 	s := &Store{
-		dir:       dir,
-		tokens:    map[string]Token{},
-		installed: map[uint64]uint64{},
+		dir:           dir,
+		tokens:        map[string]Token{},
+		installed:     map[uint64]uint64{},
+		appsInstalled: map[string]uint64{},
 	}
 	if err := readJSON(filepath.Join(dir, tokensFile), &s.tokens); err != nil {
 		return nil, err
 	}
 	if err := readJSON(filepath.Join(dir, installedFile), &s.installed); err != nil {
+		return nil, err
+	}
+	if err := readJSON(filepath.Join(dir, appsInstalledFile), &s.appsInstalled); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -117,6 +128,29 @@ func (s *Store) AllInstalled() map[uint64]uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneInstalled(s.installed)
+}
+
+// InstalledAppManifest returns the installed manifest id for an app depot, or 0.
+func (s *Store) InstalledAppManifest(appID, depotID uint32) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appsInstalled[AppDepotKey(appID, depotID)]
+}
+
+// SetInstalledAppManifest records the installed manifest id for an app depot.
+func (s *Store) SetInstalledAppManifest(appID, depotID uint32, manifestID uint64) error {
+	s.mu.Lock()
+	s.appsInstalled[AppDepotKey(appID, depotID)] = manifestID
+	snapshot := maps.Clone(s.appsInstalled)
+	s.mu.Unlock()
+	return writeJSON(filepath.Join(s.dir, appsInstalledFile), snapshot)
+}
+
+// AllInstalledApps returns a snapshot of "appID:depotID" -> manifest mappings.
+func (s *Store) AllInstalledApps() map[string]uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.appsInstalled)
 }
 
 func cloneTokens(m map[string]Token) map[string]Token { return maps.Clone(m) }

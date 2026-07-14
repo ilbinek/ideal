@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
+	"arma3modmanager/internal/steam"
 )
 
 // BranchInstallSnapshot is the install progress for a branch.
@@ -20,7 +22,7 @@ type BranchInstallSnapshot struct {
 	Error      string  `json:"error,omitempty"`
 }
 
-// BranchInstaller manages SteamCMD branch installs with SSE broadcasting.
+// BranchInstaller manages dedicated-server branch installs with SSE broadcasting.
 type BranchInstaller struct {
 	mu         sync.Mutex
 	installing bool
@@ -89,7 +91,7 @@ func (b *BranchInstaller) broadcast() {
 	}
 }
 
-// Install starts a SteamCMD install for the given branch.
+// Install starts a dedicated-server install for the given branch.
 func (b *BranchInstaller) Install(branchID int) error {
 	b.mu.Lock()
 	if b.installing {
@@ -123,7 +125,14 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	}
 
 	config, err := database.GetConfig()
-	if err != nil || config == nil || config.Username == "" {
+	if err != nil || config == nil {
+		b.setError("Settings not configured")
+		return
+	}
+
+	useGoSteam := config.Downloader == "" || config.Downloader == depot.DownloaderGoSteam
+
+	if !useGoSteam && config.Username == "" {
 		b.setError("Steam credentials not configured")
 		return
 	}
@@ -136,11 +145,34 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	if err != nil {
 		installDir = branch.InstallPath
 	}
-	log.Printf("[BRANCH] installing branch %q (steam beta %q) to %s", branch.Name, branch.SteamBranch, installDir)
+	backend := config.Downloader
+	if backend == "" {
+		backend = depot.DownloaderGoSteam
+	}
+	log.Printf("[BRANCH] installing branch %q (steam beta %q) via %s to %s", branch.Name, branch.SteamBranch, backend, installDir)
 
 	progressChan := make(chan depot.ProgressUpdate, 100)
 	installDone := make(chan error, 1)
 	go func() {
+		defer close(progressChan)
+		if useGoSteam {
+			ctx := context.Background()
+			username := config.Username
+			if username == "" {
+				username = steam.Default.Status().Username
+			}
+			sess, err := steam.Default.EnsureSession(ctx, username)
+			if err != nil {
+				installDone <- err
+				return
+			}
+			installDone <- depot.AppUpdateGoSteam(ctx, sess, steam.Default.Store(), depot.AppUpdateGoSteamOptions{
+				AppID:       depot.DedicatedServerAppIDNum,
+				SteamBranch: branch.SteamBranch,
+				InstallDir:  installDir,
+			}, progressChan)
+			return
+		}
 		installDone <- depot.AppUpdate(depot.AppUpdateOptions{
 			AppID:        depot.DedicatedServerAppID,
 			SteamBranch:  branch.SteamBranch,
@@ -149,7 +181,6 @@ func (b *BranchInstaller) runInstall(branchID int) {
 			Password:     config.Password,
 			SteamCmdPath: config.SteamCmdPath,
 		}, progressChan)
-		close(progressChan)
 	}()
 
 	for update := range progressChan {
@@ -191,8 +222,10 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	}
 	abs, _ := filepath.Abs(branch.InstallPath)
 	b.setError(fmt.Sprintf("install finished but server binary not found in %s", abs))
-	if alt := depot.FindSteamCmdDedicatedServerDir(config.SteamCmdPath); alt != "" {
-		log.Printf("[BRANCH] server files may have been downloaded to SteamCMD library: %s", alt)
+	if !useGoSteam {
+		if alt := depot.FindSteamCmdDedicatedServerDir(config.SteamCmdPath); alt != "" {
+			log.Printf("[BRANCH] server files may have been downloaded to SteamCMD library: %s", alt)
+		}
 	}
 }
 

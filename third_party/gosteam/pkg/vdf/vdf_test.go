@@ -68,4 +68,20 @@ func TestParseText(t *testing.T) {
 	if !ok || depot != 107411 {
 		t.Fatalf("FindUint32(workshopdepot) = %d, %v; want 107411, true", depot, ok)
 	}
+
+	root := Child(tree, "appinfo")
+	if root == nil {
+		t.Fatal("Child(appinfo) missing")
+	}
+	common := Child(root, "common")
+	name, ok := String(common, "name")
+	if !ok || name != "Arma 3" {
+		t.Fatalf("String(name) = %q, %v", name, ok)
+	}
+	depots := Child(root, "depots")
+	branches := Child(depots, "branches")
+	public := Child(branches, "public")
+	if build, ok := Uint32(public, "buildid"); !ok || build != 123 {
+		t.Fatalf("Uint32(buildid) = %d, %v", build, ok)
+	}
 }

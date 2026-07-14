@@ -14,7 +14,7 @@ The frontend was built quickly for functionality over polish. Contributions that
 
 ## Features
 
-- **Branches** — install Arma 3 dedicated server builds via SteamCMD (stable or Steam beta branch)
+- **Branches** — install Arma 3 dedicated server builds (built-in gosteam by default, or SteamCMD)
 - **Servers** — create instances, assign mods, edit config/profiles, upload missions, start/stop/restart, live logs
 - **Mods** — download from Steam Workshop (built-in gosteam, DepotDownloader, or SteamCMD), update checks, download queue
 - **Modsets** — import Arma 3 Launcher HTML presets
@@ -24,17 +24,15 @@ The frontend was built quickly for functionality over polish. Contributions that
 
 ## Prerequisites
 
-### Always required for server installs
+### Downloader (pick one in Settings)
 
-- **SteamCMD** on `PATH` (or set its path in **Settings**) — used to install dedicated server **branches**
-
-### Mod downloader (pick one in Settings)
+Used for **Workshop mods** and **dedicated server branch installs** (app `233780`).
 
 | Downloader | Notes |
 |---|---|
-| **Built-in (gosteam)** — default | No external binary. Log in via Settings (credentials or QR). Supports Steam Guard. Session token stored under `.gosteam/`. |
-| **DepotDownloader** | [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader) on `PATH` or an explicit path in Settings. Per-file progress. |
-| **SteamCMD** | Same binary as branch installs. Coarse progress; workshop items are moved into `./mods/<id>` after download. |
+| **Built-in (gosteam)** — default | No external binary. Log in via Settings (credentials or QR). Supports Steam Guard. Session token stored under `.gosteam/`. Covers mods and server branches — SteamCMD is not required. |
+| **DepotDownloader** | [SteamRE/DepotDownloader](https://github.com/SteamRE/DepotDownloader) on `PATH` or an explicit path in Settings. Per-file progress for mods. Branch installs still use SteamCMD when this option is selected. |
+| **SteamCMD** | Optional. Coarse progress; workshop items are moved into `./mods/<id>` after download. Also used for branch installs when selected. |
 
 For DepotDownloader / SteamCMD mod downloads, Steam username and password are stored in the SQLite DB (plain text). Prefer a dedicated Steam account. The built-in downloader does **not** require storing a password long-term once logged in.
 
@@ -87,7 +85,7 @@ Steam credentials, downloader choice, and related options live in the SQLite dat
 
 1. Open **Branches**
 2. Create a branch (name + optional Steam beta branch)
-3. Install it — Ideal uses SteamCMD to download the dedicated server (app `233780`)
+3. Install it — Ideal downloads the dedicated server (app `233780`) with the configured downloader (gosteam by default)
 
 ### 2. Create and run a server
 
@@ -209,7 +207,8 @@ Change `password` in `config.json` away from `changeme`.
 - DepotDownloader / SteamCMD: ensure the binary is on `PATH` or set the path in Settings  
 
 **Branch install fails**  
-SteamCMD must be available; Steam credentials in Settings must be valid for the dedicated server download.
+- Built-in: log in to Steam from Settings; the account must own / be entitled to the dedicated server  
+- SteamCMD / DepotDownloader: SteamCMD must be on `PATH` (or set in Settings); username/password in Settings must be valid
 
 **Server stuck or `unknown` after reboot**  
 Ideal reconciles statuses on startup. If a process is gone, status should settle to `stopped` / `unknown`. Use Stop/Start from the UI if needed.

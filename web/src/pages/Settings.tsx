@@ -82,8 +82,8 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Downloader</CardTitle>
           <CardDescription>
-            Choose which tool fetches Workshop mods. All need a Steam account that
-            owns Arma 3.
+            Used for Workshop mods and dedicated server branch installs. All need a
+            Steam account that owns Arma 3 (and the dedicated server for branches).
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -115,7 +115,8 @@ export function SettingsPage() {
               />
               <p className="text-xs text-muted-foreground">
                 How many mods download at the same time. Built-in downloader logs in
-                once and delta-patches existing mods, so re-downloads are fast.
+                once and delta-patches existing mods and server installs, so
+                re-downloads are fast. Log in below — no SteamCMD required.
               </p>
             </div>
           ) : downloader === "steamcmd" ? (
@@ -129,8 +130,9 @@ export function SettingsPage() {
                 autoComplete="off"
               />
               <p className="text-xs text-muted-foreground">
-                Progress is coarse with SteamCMD (no per-file %). Leave blank to use
-                the executable on your PATH.
+                Used for Workshop mods and dedicated server branch installs. Progress
+                is coarse (no per-file %). Leave blank to use the executable on your
+                PATH.
               </p>
             </div>
           ) : (
@@ -144,7 +146,9 @@ export function SettingsPage() {
                 autoComplete="off"
               />
               <p className="text-xs text-muted-foreground">
-                Leave blank to use the executable on your PATH.
+                Used for Workshop mods. Dedicated server branch installs still use
+                SteamCMD when this tool is selected (SteamCMD must be on PATH). Leave
+                blank to use DepotDownloader on PATH.
               </p>
             </div>
           )}

@@ -1,0 +1,18 @@
+syntax = "proto2";
+package steammessages_clientserver_appinfo;
+option go_package = "github.com/0xAozora/go-steam/protocol/protobuf";
+
+// CMsgClientPICSPrivateBetaRequest / Response are not in the vendored generated
+// appinfo protos; added for password-protected branch depot sections.
+
+message CMsgClientPICSPrivateBetaRequest {
+	optional uint32 appid = 1;
+	optional uint64 access_token = 2;
+	optional string beta_name = 3;
+	optional bytes password_hash = 4;
+}
+
+message CMsgClientPICSPrivateBetaResponse {
+	optional int32 eresult = 1 [default = 2];
+	optional bytes depot_section = 2;
+}

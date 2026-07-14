@@ -80,12 +80,25 @@ func (c *Client) DepotKey(ctx context.Context, appID, depotID uint32) ([]byte, e
 	return key, nil
 }
 
+// ManifestOpts controls optional branch parameters for GetManifestRequestCode.
+// Leave Branch empty for workshop / default public content.
+type ManifestOpts struct {
+	Branch             string // Steam branch name (e.g. "public", "profiling")
+	BranchPasswordHash string // hex-encoded beta password hash, when required
+}
+
 // manifestRequestCode obtains a short-lived (~5 min) code authorizing a manifest fetch.
-func (c *Client) manifestRequestCode(ctx context.Context, appID, depotID uint32, manifestID uint64) (uint64, error) {
+func (c *Client) manifestRequestCode(ctx context.Context, appID, depotID uint32, manifestID uint64, opts ManifestOpts) (uint64, error) {
 	req := &unified.CContentServerDirectory_GetManifestRequestCode_Request{
 		AppId:      &appID,
 		DepotId:    &depotID,
 		ManifestId: &manifestID,
+	}
+	if opts.Branch != "" {
+		req.AppBranch = &opts.Branch
+	}
+	if opts.BranchPasswordHash != "" {
+		req.BranchPasswordHash = &opts.BranchPasswordHash
 	}
 	resp := &unified.CContentServerDirectory_GetManifestRequestCode_Response{}
 	if err := steamrpc.Call(ctx, c.sc, steamlang.EMsg_ServiceMethodCallFromClient, "ContentServerDirectory.GetManifestRequestCode#1", req, resp); err != nil {
@@ -100,8 +113,15 @@ func (c *Client) manifestRequestCode(ctx context.Context, appID, depotID uint32,
 
 // DownloadManifest fetches and parses a depot manifest. depotKey is required if
 // the manifest's filenames are encrypted; pass the result of DepotKey.
+// For branch-specific app content, prefer DownloadManifestOpts.
 func (c *Client) DownloadManifest(ctx context.Context, appID, depotID uint32, manifestID uint64, depotKey []byte) (*manifest.Manifest, []byte, error) {
-	code, err := c.manifestRequestCode(ctx, appID, depotID, manifestID)
+	return c.DownloadManifestOpts(ctx, appID, depotID, manifestID, depotKey, ManifestOpts{})
+}
+
+// DownloadManifestOpts is DownloadManifest with optional branch parameters for
+// non-public app branches (including password-protected betas).
+func (c *Client) DownloadManifestOpts(ctx context.Context, appID, depotID uint32, manifestID uint64, depotKey []byte, opts ManifestOpts) (*manifest.Manifest, []byte, error) {
+	code, err := c.manifestRequestCode(ctx, appID, depotID, manifestID, opts)
 	if err != nil {
 		return nil, nil, err
 	}
