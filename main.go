@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"arma3modmanager/internal/config"
 	"arma3modmanager/internal/database"
@@ -45,16 +46,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	mux := http.NewServeMux()
+	// Public mission downloads use /{slug}/missions/{name}, which cannot share a
+	// ServeMux with /api/ (Go treats {slug}=api as overlapping). Route them on a
+	// separate mux and only consult it for non-/api/ GET requests.
+	missions := http.NewServeMux()
+	missions.HandleFunc("GET /{slug}/missions/{name}", handlers.PublicMissionDownloadHandler)
 
-	// JSON REST API
-	mux.Handle("/api/", handlers.APIHandler())
+	app := http.NewServeMux()
+	app.Handle("/api/", handlers.APIHandler())
+	app.Handle("/", web.Handler())
 
-	// Public Arma mission HTTP download (no auth; gated per-server)
-	mux.HandleFunc("GET /{slug}/missions/{name}", handlers.PublicMissionDownloadHandler)
-
-	// Embedded React SPA (with client-side routing fallback)
-	mux.Handle("/", web.Handler())
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/") {
+			if h, pattern := missions.Handler(r); pattern != "" {
+				h.ServeHTTP(w, r)
+				return
+			}
+		}
+		app.ServeHTTP(w, r)
+	})
 
 	// Listen address: defaults to all interfaces on the configured port.
 	// Override with IDEAL_LISTEN (e.g. "127.0.0.1:8080") to bind loopback only,
@@ -65,7 +75,7 @@ func main() {
 	}
 
 	log.Printf("Starting Arma 3 Mod Manager on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, root); err != nil {
 		log.Fatal(err)
 	}
 }
