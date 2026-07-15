@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"arma3modmanager/internal/auth"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/parser"
 	"arma3modmanager/internal/queue"
+	"arma3modmanager/internal/updatecheck"
 	"arma3modmanager/internal/utils"
 	"arma3modmanager/internal/workshop"
 )
@@ -57,13 +57,15 @@ func SessionHandler(w http.ResponseWriter, r *http.Request) {
 func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	config, _ := database.GetConfig()
 	resp := map[string]interface{}{
-		"username":               "",
-		"apiKey":                 "",
-		"hasPassword":            false,
-		"downloader":             depot.DownloaderGoSteam,
-		"steamCmdPath":           "",
-		"depotDownloaderPath":    "",
-		"maxConcurrentDownloads": 4,
+		"username":                   "",
+		"apiKey":                     "",
+		"hasPassword":                false,
+		"downloader":                 depot.DownloaderGoSteam,
+		"steamCmdPath":               "",
+		"depotDownloaderPath":        "",
+		"maxConcurrentDownloads":     4,
+		"updateCheckIntervalMinutes": 0,
+		"discordWebhookUrl":          "",
 	}
 	if config != nil {
 		resp["username"] = config.Username
@@ -77,19 +79,23 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		if config.MaxConcurrentDownloads > 0 {
 			resp["maxConcurrentDownloads"] = config.MaxConcurrentDownloads
 		}
+		resp["updateCheckIntervalMinutes"] = config.UpdateCheckIntervalMinutes
+		resp["discordWebhookUrl"] = config.DiscordWebhookURL
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Username               string `json:"username"`
-		Password               string `json:"password"`
-		ApiKey                 string `json:"apiKey"`
-		Downloader             string `json:"downloader"`
-		SteamCmdPath           string `json:"steamCmdPath"`
-		DepotDownloaderPath    string `json:"depotDownloaderPath"`
-		MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"`
+		Username                   string `json:"username"`
+		Password                   string `json:"password"`
+		ApiKey                     string `json:"apiKey"`
+		Downloader                 string `json:"downloader"`
+		SteamCmdPath               string `json:"steamCmdPath"`
+		DepotDownloaderPath        string `json:"depotDownloaderPath"`
+		MaxConcurrentDownloads     int    `json:"maxConcurrentDownloads"`
+		UpdateCheckIntervalMinutes int    `json:"updateCheckIntervalMinutes"`
+		DiscordWebhookURL          string `json:"discordWebhookUrl"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -112,11 +118,15 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 		downloader = depot.DownloaderGoSteam
 	}
 
-	if err := database.SaveConfig(body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath, body.MaxConcurrentDownloads); err != nil {
+	if err := database.SaveConfig(
+		body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath,
+		body.MaxConcurrentDownloads, body.UpdateCheckIntervalMinutes, body.DiscordWebhookURL,
+	); err != nil {
 		log.Printf("Error saving config: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to save settings")
 		return
 	}
+	updatecheck.Default.Reload()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -400,43 +410,12 @@ func CheckUpdatesAPIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updates := make(map[int]bool)
-
-	var workshopIDs []string
-	modMap := make(map[string]database.Mod)
-	for _, mod := range mods {
-		workshopIDs = append(workshopIDs, mod.WorkshopID)
-		modMap[mod.WorkshopID] = mod
-	}
-
-	details, err := workshop.GetModDetails(workshopIDs, config.ApiKey)
+	updates, steamTimes, err := updatecheck.CheckMods(config.ApiKey, mods)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to check updates: %v", err))
 		return
 	}
-
-	for _, detail := range details {
-		if detail.Result != 1 {
-			log.Printf("Failed to get details for workshop ID %s, result code: %d", detail.PublishedFileID, detail.Result)
-			continue
-		}
-
-		mod, exists := modMap[detail.PublishedFileID]
-		if !exists {
-			continue
-		}
-
-		lastUpdate := time.Unix(detail.TimeUpdated, 0)
-		updateAvailable := false
-		if mod.Downloaded && !mod.LastUpdated.IsZero() {
-			updateAvailable = lastUpdate.After(mod.LastUpdated)
-		} else if !mod.Downloaded {
-			updateAvailable = true
-		}
-
-		updates[mod.ID] = updateAvailable
-		database.UpdateModChecked(mod.ID, updateAvailable)
-	}
+	updatecheck.NotifyModUpdates(config.DiscordWebhookURL, mods, updates, steamTimes)
 
 	writeJSON(w, http.StatusOK, updates)
 }

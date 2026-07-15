@@ -121,9 +121,14 @@ export function Branches() {
                       {b.installPath}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={b.installed ? "default" : "outline"}>
-                        {b.installed ? "installed" : "not installed"}
-                      </Badge>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge variant={b.installed ? "default" : "outline"}>
+                          {b.installed ? "installed" : "not installed"}
+                        </Badge>
+                        {b.updateAvailable && (
+                          <Badge variant="destructive">update available</Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">

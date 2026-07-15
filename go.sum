@@ -7,6 +7,8 @@ github.com/go-ole/go-ole v1.2.6/go.mod h1:pprOEPIfldk/42T2oK7lQ4v4JSDwmV0As9GaiU
 github.com/google/go-cmp v0.5.6/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/ilbinek/godishook v1.0.0 h1:diMpUsuAbtb7PfD1AxZHwEAfoMjTbrOJ53iVQHsda8Q=
+github.com/ilbinek/godishook v1.0.0/go.mod h1:tVuruh9VTGUhLezGMa3ioozlvDoDxL1wttMXGHyO5CE=
 github.com/itchio/lzma v0.0.0-20190703113020-d3e24e3e3d49 h1:+YrBMf3rkLjkT10zIHyVE4S7ma4hqvfjl6XgnzZwS6o=
 github.com/itchio/lzma v0.0.0-20190703113020-d3e24e3e3d49/go.mod h1:avNrevQMli1pYPsz1+HIHMvx95pk6O+6otbWqCZPeZI=
 github.com/klauspost/compress v1.18.6 h1:2jupLlAwFm95+YDR+NwD2MEfFO9d4z4Prjl1XXDjuao=

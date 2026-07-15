@@ -11,6 +11,7 @@ import (
 	"arma3modmanager/internal/handlers"
 	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/steam"
+	"arma3modmanager/internal/updatecheck"
 	"arma3modmanager/internal/utils"
 	"arma3modmanager/web"
 )
@@ -28,6 +29,8 @@ func main() {
 	defer database.Close()
 
 	server.Init()
+
+	updatecheck.Default.Start()
 
 	log.Printf("[IDEAL] data directory: %s", utils.DataRoot())
 

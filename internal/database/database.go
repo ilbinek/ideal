@@ -15,14 +15,16 @@ import (
 var db *sql.DB
 
 type Config struct {
-	ID                     int    `json:"id"`
-	Username               string `json:"username"`
-	Password               string `json:"-"`
-	ApiKey                 string `json:"apiKey"`
-	Downloader             string `json:"downloader"`             // "gosteam" | "depotdownloader" | "steamcmd"
-	SteamCmdPath           string `json:"steamCmdPath"`           // optional; blank = use PATH
-	DepotDownloaderPath    string `json:"depotDownloaderPath"`    // optional; blank = use PATH
-	MaxConcurrentDownloads int    `json:"maxConcurrentDownloads"` // gosteam: mods downloaded at once
+	ID                         int    `json:"id"`
+	Username                   string `json:"username"`
+	Password                   string `json:"-"`
+	ApiKey                     string `json:"apiKey"`
+	Downloader                 string `json:"downloader"`                 // "gosteam" | "depotdownloader" | "steamcmd"
+	SteamCmdPath               string `json:"steamCmdPath"`               // optional; blank = use PATH
+	DepotDownloaderPath        string `json:"depotDownloaderPath"`        // optional; blank = use PATH
+	MaxConcurrentDownloads     int    `json:"maxConcurrentDownloads"`     // gosteam: mods downloaded at once
+	UpdateCheckIntervalMinutes int    `json:"updateCheckIntervalMinutes"` // 0 = off
+	DiscordWebhookURL          string `json:"discordWebhookUrl"`
 }
 
 type Modset struct {
@@ -32,14 +34,15 @@ type Modset struct {
 }
 
 type Mod struct {
-	ID              int       `json:"id"`
-	WorkshopID      string    `json:"workshopId"`
-	Name            string    `json:"name"`
-	Downloaded      bool      `json:"downloaded"`
-	LocalPath       string    `json:"localPath"`
-	LastUpdated     time.Time `json:"lastUpdated"`
-	LastChecked     time.Time `json:"lastChecked"`
-	UpdateAvailable bool      `json:"updateAvailable"`
+	ID                  int       `json:"id"`
+	WorkshopID          string    `json:"workshopId"`
+	Name                string    `json:"name"`
+	Downloaded          bool      `json:"downloaded"`
+	LocalPath           string    `json:"localPath"`
+	LastUpdated         time.Time `json:"lastUpdated"`
+	LastChecked         time.Time `json:"lastChecked"`
+	UpdateAvailable     bool      `json:"updateAvailable"`
+	LastNotifiedUpdated int64     `json:"-"` // Steam time_updated last Discord-notified for
 }
 
 func Init() error {
@@ -111,6 +114,9 @@ func migrate() error {
 		"ALTER TABLE config ADD COLUMN steam_cmd_path TEXT DEFAULT ''",
 		"ALTER TABLE config ADD COLUMN depot_downloader_path TEXT DEFAULT ''",
 		"ALTER TABLE config ADD COLUMN max_concurrent_downloads INTEGER DEFAULT 4",
+		"ALTER TABLE config ADD COLUMN update_check_interval_minutes INTEGER DEFAULT 0",
+		"ALTER TABLE config ADD COLUMN discord_webhook_url TEXT DEFAULT ''",
+		"ALTER TABLE mods ADD COLUMN last_notified_updated INTEGER DEFAULT 0",
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -134,18 +140,26 @@ func GetConfig() (*Config, error) {
 		       COALESCE(downloader, 'gosteam'),
 		       COALESCE(steam_cmd_path, ''),
 		       COALESCE(depot_downloader_path, ''),
-		       COALESCE(max_concurrent_downloads, 4)
+		       COALESCE(max_concurrent_downloads, 4),
+		       COALESCE(update_check_interval_minutes, 0),
+		       COALESCE(discord_webhook_url, '')
 		FROM config LIMIT 1`).
 		Scan(&config.ID, &config.Username, &config.Password, &config.ApiKey,
 			&config.Downloader, &config.SteamCmdPath, &config.DepotDownloaderPath,
-			&config.MaxConcurrentDownloads)
+			&config.MaxConcurrentDownloads, &config.UpdateCheckIntervalMinutes,
+			&config.DiscordWebhookURL)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return config, err
 }
 
-func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string, maxConcurrentDownloads int) error {
+// ValidUpdateCheckIntervals are allowed auto-check presets (minutes); 0 = off.
+var ValidUpdateCheckIntervals = map[int]bool{
+	0: true, 15: true, 30: true, 60: true, 360: true, 720: true, 1440: true,
+}
+
+func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string, maxConcurrentDownloads, updateCheckIntervalMinutes int, discordWebhookURL string) error {
 	config, err := GetConfig()
 	if err != nil {
 		return err
@@ -154,16 +168,25 @@ func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownl
 	if maxConcurrentDownloads <= 0 {
 		maxConcurrentDownloads = 4
 	}
+	if !ValidUpdateCheckIntervals[updateCheckIntervalMinutes] {
+		updateCheckIntervalMinutes = 0
+	}
 
 	if config == nil {
 		_, err = db.Exec(
-			"INSERT INTO config (username, password, api_key, downloader, steam_cmd_path, depot_downloader_path, max_concurrent_downloads) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath, maxConcurrentDownloads,
+			`INSERT INTO config (username, password, api_key, downloader, steam_cmd_path, depot_downloader_path,
+			 max_concurrent_downloads, update_check_interval_minutes, discord_webhook_url)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
+			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL,
 		)
 	} else {
 		_, err = db.Exec(
-			"UPDATE config SET username = ?, password = ?, api_key = ?, downloader = ?, steam_cmd_path = ?, depot_downloader_path = ?, max_concurrent_downloads = ? WHERE id = ?",
-			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath, maxConcurrentDownloads, config.ID,
+			`UPDATE config SET username = ?, password = ?, api_key = ?, downloader = ?, steam_cmd_path = ?,
+			 depot_downloader_path = ?, max_concurrent_downloads = ?, update_check_interval_minutes = ?,
+			 discord_webhook_url = ? WHERE id = ?`,
+			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
+			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL, config.ID,
 		)
 	}
 	return err
@@ -254,7 +277,8 @@ func CreateMod(workshopID, name string) error {
 func GetMods(modsetID int) ([]Mod, error) {
 	rows, err := db.Query(`
 		SELECT m.id, m.workshop_id, m.name, m.downloaded, COALESCE(m.local_path, ''), 
-		       COALESCE(m.last_updated, ''), COALESCE(m.last_checked, ''), m.update_available
+		       COALESCE(m.last_updated, ''), COALESCE(m.last_checked, ''), m.update_available,
+		       COALESCE(m.last_notified_updated, 0)
 		FROM mods m
 		INNER JOIN modset_mods mm ON m.id = mm.mod_id
 		WHERE mm.modset_id = ?
@@ -263,43 +287,30 @@ func GetMods(modsetID int) ([]Mod, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var mods []Mod
-	for rows.Next() {
-		var m Mod
-		var lastUpdated, lastChecked string
-		if err := rows.Scan(&m.ID, &m.WorkshopID, &m.Name, &m.Downloaded,
-			&m.LocalPath, &lastUpdated, &lastChecked, &m.UpdateAvailable); err != nil {
-			return nil, err
-		}
-		if lastUpdated != "" {
-			m.LastUpdated, _ = time.Parse("2006-01-02 15:04:05", lastUpdated)
-		}
-		if lastChecked != "" {
-			m.LastChecked, _ = time.Parse("2006-01-02 15:04:05", lastChecked)
-		}
-		mods = append(mods, m)
-	}
-	return mods, rows.Err()
+	return scanMods(rows)
 }
 
 func GetAllMods() ([]Mod, error) {
 	rows, err := db.Query(`
 		SELECT id, workshop_id, name, downloaded, COALESCE(local_path, ''), 
-		       COALESCE(last_updated, ''), COALESCE(last_checked, ''), update_available
+		       COALESCE(last_updated, ''), COALESCE(last_checked, ''), update_available,
+		       COALESCE(last_notified_updated, 0)
 		FROM mods 
 		ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanMods(rows)
+}
 
+func scanMods(rows *sql.Rows) ([]Mod, error) {
 	var mods []Mod
 	for rows.Next() {
 		var m Mod
 		var lastUpdated, lastChecked string
 		if err := rows.Scan(&m.ID, &m.WorkshopID, &m.Name, &m.Downloaded,
-			&m.LocalPath, &lastUpdated, &lastChecked, &m.UpdateAvailable); err != nil {
+			&m.LocalPath, &lastUpdated, &lastChecked, &m.UpdateAvailable, &m.LastNotifiedUpdated); err != nil {
 			return nil, err
 		}
 		if lastUpdated != "" {
@@ -325,6 +336,15 @@ func UpdateModChecked(id int, updateAvailable bool) error {
 	_, err := db.Exec(
 		"UPDATE mods SET last_checked = CURRENT_TIMESTAMP, update_available = ? WHERE id = ?",
 		updateAvailable, id,
+	)
+	return err
+}
+
+// SetModNotified records that Discord was notified for this Steam time_updated.
+func SetModNotified(id int, steamTimeUpdated int64) error {
+	_, err := db.Exec(
+		"UPDATE mods SET last_notified_updated = ? WHERE id = ?",
+		steamTimeUpdated, id,
 	)
 	return err
 }
@@ -356,7 +376,8 @@ func GetModsByIDs(ids []int) ([]Mod, error) {
 	}
 	query := fmt.Sprintf(`
 		SELECT id, workshop_id, name, downloaded, COALESCE(local_path, ''),
-		       COALESCE(last_updated, ''), COALESCE(last_checked, ''), update_available
+		       COALESCE(last_updated, ''), COALESCE(last_checked, ''), update_available,
+		       COALESCE(last_notified_updated, 0)
 		FROM mods
 		WHERE id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := db.Query(query, args...)
@@ -364,24 +385,7 @@ func GetModsByIDs(ids []int) ([]Mod, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var mods []Mod
-	for rows.Next() {
-		var m Mod
-		var lastUpdated, lastChecked string
-		if err := rows.Scan(&m.ID, &m.WorkshopID, &m.Name, &m.Downloaded,
-			&m.LocalPath, &lastUpdated, &lastChecked, &m.UpdateAvailable); err != nil {
-			return nil, err
-		}
-		if lastUpdated != "" {
-			m.LastUpdated, _ = time.Parse("2006-01-02 15:04:05", lastUpdated)
-		}
-		if lastChecked != "" {
-			m.LastChecked, _ = time.Parse("2006-01-02 15:04:05", lastChecked)
-		}
-		mods = append(mods, m)
-	}
-	return mods, rows.Err()
+	return scanMods(rows)
 }
 
 func GetMod(id int) (*Mod, error) {
@@ -390,7 +394,9 @@ func GetMod(id int) (*Mod, error) {
 	var localPath sql.NullString
 
 	err := db.QueryRow(
-		"SELECT id, workshop_id, name, downloaded, local_path, last_updated, last_checked, update_available FROM mods WHERE id = ?",
+		`SELECT id, workshop_id, name, downloaded, local_path, last_updated, last_checked, update_available,
+		        COALESCE(last_notified_updated, 0)
+		 FROM mods WHERE id = ?`,
 		id,
 	).Scan(
 		&mod.ID,
@@ -401,12 +407,12 @@ func GetMod(id int) (*Mod, error) {
 		&lastUpdated,
 		&lastChecked,
 		&mod.UpdateAvailable,
+		&mod.LastNotifiedUpdated,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	// Handle NULL values
 	if localPath.Valid {
 		mod.LocalPath = localPath.String
 	}

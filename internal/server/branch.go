@@ -204,7 +204,7 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	if installed {
 		gameDir := BranchGameDir(branch.InstallPath)
 		log.Printf("[BRANCH] install complete — game files at %s", gameDir)
-		if err := database.SetBranchInstalled(branchID, true); err != nil {
+		if err := database.SetBranchInstalled(branchID, true, depot.ReadInstalledBuildID(branch.InstallPath)); err != nil {
 			log.Printf("[BRANCH] failed to update branch status: %v", err)
 		}
 		b.mu.Lock()

@@ -32,7 +32,7 @@ func GetBranchesHandler(w http.ResponseWriter, r *http.Request) {
 		installed := server.IsBranchInstalled(branches[i].InstallPath)
 		branches[i].Installed = installed
 		if installed {
-			_ = database.SetBranchInstalled(branches[i].ID, true)
+			_ = database.SetBranchInstalled(branches[i].ID, true, "")
 		}
 	}
 	writeJSON(w, http.StatusOK, branches)

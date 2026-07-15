@@ -82,6 +82,8 @@ export const api = {
     steamCmdPath: string;
     depotDownloaderPath: string;
     maxConcurrentDownloads: number;
+    updateCheckIntervalMinutes: number;
+    discordWebhookUrl: string;
   }) =>
     request<{ ok: boolean }>("/api/settings", {
       method: "POST",

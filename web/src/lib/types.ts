@@ -25,6 +25,8 @@ export interface Settings {
   steamCmdPath: string;
   depotDownloaderPath: string;
   maxConcurrentDownloads: number;
+  updateCheckIntervalMinutes: number;
+  discordWebhookUrl: string;
 }
 
 export type SteamLoginPhase =
@@ -78,6 +80,9 @@ export interface ArmaBranch {
   installPath: string;
   installed: boolean;
   lastUpdated: string;
+  buildId: string;
+  updateAvailable: boolean;
+  lastChecked: string;
 }
 
 export interface BranchInstallSnapshot {

@@ -1,8 +1,9 @@
 module arma3modmanager
 
-go 1.25.0
+go 1.25.1
 
 require (
+	github.com/ilbinek/godishook v1.0.0
 	github.com/mattn/go-sqlite3 v1.14.19
 	github.com/shirou/gopsutil/v4 v4.26.6
 	golang.org/x/net v0.32.0

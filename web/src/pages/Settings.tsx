@@ -29,6 +29,8 @@ export function SettingsPage() {
   const [steamCmdPath, setSteamCmdPath] = useState("");
   const [depotDownloaderPath, setDepotDownloaderPath] = useState("");
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(4);
+  const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(0);
+  const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
 
   useEffect(() => {
     if (data) {
@@ -38,6 +40,8 @@ export function SettingsPage() {
       setSteamCmdPath(data.steamCmdPath);
       setDepotDownloaderPath(data.depotDownloaderPath);
       setMaxConcurrentDownloads(data.maxConcurrentDownloads || 4);
+      setUpdateCheckIntervalMinutes(data.updateCheckIntervalMinutes || 0);
+      setDiscordWebhookUrl(data.discordWebhookUrl || "");
     }
   }, [data]);
 
@@ -51,6 +55,8 @@ export function SettingsPage() {
         steamCmdPath,
         depotDownloaderPath,
         maxConcurrentDownloads,
+        updateCheckIntervalMinutes,
+        discordWebhookUrl,
       }),
     onSuccess: () => {
       toast.success("Settings saved");
@@ -197,6 +203,59 @@ export function SettingsPage() {
               onChange={(e) => setApiKey(e.target.value)}
               autoComplete="off"
             />
+            <p className="text-xs text-muted-foreground">
+              Required for Workshop update checks. Get a key at{" "}
+              <a
+                href="https://steamcommunity.com/dev/apikey"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                steamcommunity.com/dev/apikey
+              </a>
+              .
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="max-w-xl">
+        <CardHeader>
+          <CardTitle className="text-base">Update notifications</CardTitle>
+          <CardDescription>
+            Periodically check Workshop mods and dedicated-server branches. Discord
+            alerts fire only when an update affects a server you have configured.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="updateInterval">Auto-check interval</Label>
+            <Select
+              id="updateInterval"
+              value={String(updateCheckIntervalMinutes)}
+              onChange={(e) => setUpdateCheckIntervalMinutes(Number(e.target.value))}
+            >
+              <option value="0">Off</option>
+              <option value="15">Every 15 minutes</option>
+              <option value="30">Every 30 minutes</option>
+              <option value="60">Every hour</option>
+              <option value="360">Every 6 hours</option>
+              <option value="720">Every 12 hours</option>
+              <option value="1440">Every 24 hours</option>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="discordWebhook">Discord webhook URL</Label>
+            <Input
+              id="discordWebhook"
+              value={discordWebhookUrl}
+              onChange={(e) => setDiscordWebhookUrl(e.target.value)}
+              placeholder="https://discord.com/api/webhooks/…"
+              autoComplete="off"
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave blank to update flags in the UI without sending Discord messages.
+            </p>
           </div>
         </CardContent>
       </Card>

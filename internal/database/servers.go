@@ -21,12 +21,16 @@ const (
 )
 
 type ArmaBranch struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	SteamBranch string    `json:"steamBranch"`
-	InstallPath string    `json:"installPath"`
-	Installed   bool      `json:"installed"`
-	LastUpdated time.Time `json:"lastUpdated"`
+	ID                  int       `json:"id"`
+	Name                string    `json:"name"`
+	SteamBranch         string    `json:"steamBranch"`
+	InstallPath         string    `json:"installPath"`
+	Installed           bool      `json:"installed"`
+	LastUpdated         time.Time `json:"lastUpdated"`
+	BuildID             string    `json:"buildId"`
+	UpdateAvailable     bool      `json:"updateAvailable"`
+	LastChecked         time.Time `json:"lastChecked"`
+	LastNotifiedBuildID string    `json:"-"`
 }
 
 type Server struct {
@@ -158,6 +162,10 @@ func migrateServerColumns() error {
 		"ALTER TABLE servers ADD COLUMN mission_http_serve BOOLEAN DEFAULT 0",
 		"ALTER TABLE server_mods ADD COLUMN enabled BOOLEAN DEFAULT 1",
 		"ALTER TABLE server_mods ADD COLUMN source TEXT DEFAULT ''",
+		"ALTER TABLE arma_branches ADD COLUMN build_id TEXT DEFAULT ''",
+		"ALTER TABLE arma_branches ADD COLUMN update_available BOOLEAN DEFAULT 0",
+		"ALTER TABLE arma_branches ADD COLUMN last_checked TIMESTAMP",
+		"ALTER TABLE arma_branches ADD COLUMN last_notified_build_id TEXT DEFAULT ''",
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -305,7 +313,9 @@ func removeInvalidCreativeDevBranch() error {
 
 func GetBranches() ([]ArmaBranch, error) {
 	rows, err := db.Query(`
-		SELECT id, name, steam_branch, install_path, installed, COALESCE(last_updated, '')
+		SELECT id, name, steam_branch, install_path, installed, COALESCE(last_updated, ''),
+		       COALESCE(build_id, ''), COALESCE(update_available, 0), COALESCE(last_checked, ''),
+		       COALESCE(last_notified_build_id, '')
 		FROM arma_branches ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -315,12 +325,16 @@ func GetBranches() ([]ArmaBranch, error) {
 	var branches []ArmaBranch
 	for rows.Next() {
 		var b ArmaBranch
-		var lastUpdated string
-		if err := rows.Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated); err != nil {
+		var lastUpdated, lastChecked string
+		if err := rows.Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated,
+			&b.BuildID, &b.UpdateAvailable, &lastChecked, &b.LastNotifiedBuildID); err != nil {
 			return nil, err
 		}
 		if lastUpdated != "" {
 			b.LastUpdated, _ = time.Parse("2006-01-02 15:04:05", lastUpdated)
+		}
+		if lastChecked != "" {
+			b.LastChecked, _ = time.Parse("2006-01-02 15:04:05", lastChecked)
 		}
 		b.InstallPath = utils.ResolveDataPath(b.InstallPath)
 		branches = append(branches, b)
@@ -330,16 +344,22 @@ func GetBranches() ([]ArmaBranch, error) {
 
 func GetBranch(id int) (*ArmaBranch, error) {
 	var b ArmaBranch
-	var lastUpdated sql.NullTime
+	var lastUpdated, lastChecked sql.NullTime
 	err := db.QueryRow(`
-		SELECT id, name, steam_branch, install_path, installed, last_updated
+		SELECT id, name, steam_branch, install_path, installed, last_updated,
+		       COALESCE(build_id, ''), COALESCE(update_available, 0), last_checked,
+		       COALESCE(last_notified_build_id, '')
 		FROM arma_branches WHERE id = ?`, id).
-		Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated)
+		Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated,
+			&b.BuildID, &b.UpdateAvailable, &lastChecked, &b.LastNotifiedBuildID)
 	if err != nil {
 		return nil, err
 	}
 	if lastUpdated.Valid {
 		b.LastUpdated = lastUpdated.Time
+	}
+	if lastChecked.Valid {
+		b.LastChecked = lastChecked.Time
 	}
 	b.InstallPath = utils.ResolveDataPath(b.InstallPath)
 	return &b, nil
@@ -348,16 +368,22 @@ func GetBranch(id int) (*ArmaBranch, error) {
 // GetBranchBySteamBranch returns the first branch with the given Steam beta name.
 func GetBranchBySteamBranch(steamBranch string) (*ArmaBranch, error) {
 	var b ArmaBranch
-	var lastUpdated sql.NullTime
+	var lastUpdated, lastChecked sql.NullTime
 	err := db.QueryRow(`
-		SELECT id, name, steam_branch, install_path, installed, last_updated
+		SELECT id, name, steam_branch, install_path, installed, last_updated,
+		       COALESCE(build_id, ''), COALESCE(update_available, 0), last_checked,
+		       COALESCE(last_notified_build_id, '')
 		FROM arma_branches WHERE steam_branch = ? ORDER BY id LIMIT 1`, steamBranch).
-		Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated)
+		Scan(&b.ID, &b.Name, &b.SteamBranch, &b.InstallPath, &b.Installed, &lastUpdated,
+			&b.BuildID, &b.UpdateAvailable, &lastChecked, &b.LastNotifiedBuildID)
 	if err != nil {
 		return nil, err
 	}
 	if lastUpdated.Valid {
 		b.LastUpdated = lastUpdated.Time
+	}
+	if lastChecked.Valid {
+		b.LastChecked = lastChecked.Time
 	}
 	b.InstallPath = utils.ResolveDataPath(b.InstallPath)
 	return &b, nil
@@ -386,12 +412,64 @@ func CreateBranch(name, steamBranch, installPath string) (int64, error) {
 	return result.LastInsertId()
 }
 
-func SetBranchInstalled(id int, installed bool) error {
+func SetBranchInstalled(id int, installed bool, buildID string) error {
+	if buildID != "" {
+		_, err := db.Exec(
+			`UPDATE arma_branches SET installed = ?, last_updated = CURRENT_TIMESTAMP,
+			 build_id = ?, update_available = 0 WHERE id = ?`,
+			installed, buildID, id,
+		)
+		return err
+	}
 	_, err := db.Exec(
-		"UPDATE arma_branches SET installed = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?",
+		`UPDATE arma_branches SET installed = ? WHERE id = ?`,
 		installed, id,
 	)
 	return err
+}
+
+// UpdateBranchChecked sets update_available and last_checked for a branch.
+func UpdateBranchChecked(id int, updateAvailable bool) error {
+	_, err := db.Exec(
+		`UPDATE arma_branches SET last_checked = CURRENT_TIMESTAMP, update_available = ? WHERE id = ?`,
+		updateAvailable, id,
+	)
+	return err
+}
+
+// SetBranchNotified records that Discord was notified for this remote build ID.
+func SetBranchNotified(id int, buildID string) error {
+	_, err := db.Exec(
+		`UPDATE arma_branches SET last_notified_build_id = ? WHERE id = ?`,
+		buildID, id,
+	)
+	return err
+}
+
+// GetServersUsingBranch returns servers that use the given dedicated-server branch.
+func GetServersUsingBranch(branchID int) ([]ModServerRef, error) {
+	rows, err := db.Query(`
+		SELECT id, name, slug, status
+		FROM servers
+		WHERE branch_id = ?
+		ORDER BY name`, branchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var servers []ModServerRef
+	for rows.Next() {
+		var s ModServerRef
+		if err := rows.Scan(&s.ID, &s.Name, &s.Slug, &s.Status); err != nil {
+			return nil, err
+		}
+		servers = append(servers, s)
+	}
+	if servers == nil {
+		servers = []ModServerRef{}
+	}
+	return servers, rows.Err()
 }
 
 const serverSelectCols = `
