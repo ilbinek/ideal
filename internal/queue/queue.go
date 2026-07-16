@@ -9,6 +9,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
@@ -114,6 +115,29 @@ func (m *Manager) hasPendingLocked(id int) bool {
 	return false
 }
 
+// clearFinishedAfter waits delay, then removes done/error items if the queue is
+// still idle. A new Enqueue while waiting cancels the clear (processing is true).
+func (m *Manager) clearFinishedAfter(delay time.Duration) {
+	time.Sleep(delay)
+	m.mu.Lock()
+	if m.processing {
+		m.mu.Unlock()
+		return
+	}
+	kept := m.items[:0]
+	for _, it := range m.items {
+		if it.Status == StatusQueued || it.Status == StatusDownloading {
+			kept = append(kept, it)
+		}
+	}
+	changed := len(kept) != len(m.items)
+	m.items = kept
+	m.mu.Unlock()
+	if changed {
+		m.broadcast()
+	}
+}
+
 func (m *Manager) worker() {
 	for {
 		config, cfgErr := database.GetConfig()
@@ -131,6 +155,9 @@ func (m *Manager) worker() {
 			m.processing = false
 			m.mu.Unlock()
 			m.broadcast()
+			// Drop finished/error items after a short pause so the Mods page can
+			// show "Queue finished", then clear so the UI doesn't linger forever.
+			go m.clearFinishedAfter(5 * time.Second)
 			return
 		}
 		m.mu.Unlock()

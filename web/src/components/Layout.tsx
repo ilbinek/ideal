@@ -23,16 +23,14 @@ import { permissionsOf, useSession } from "@/hooks/useSession";
 
 function QueueIndicator() {
   const { snapshot } = useDownloads();
-  if (!snapshot.processing && snapshot.total === 0) return null;
+  // Only show while work is in flight — finished batches linger in the
+  // snapshot for the Mods page, but shouldn't stick in the chrome forever.
+  if (!snapshot.processing) return null;
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-secondary px-3 py-1.5 text-xs text-muted-foreground">
-      <Download
-        className={cn("size-3.5", snapshot.processing && "animate-pulse text-foreground")}
-      />
+      <Download className="size-3.5 animate-pulse text-foreground" />
       <span>
-        {snapshot.processing
-          ? `Downloading ${snapshot.done}/${snapshot.total}`
-          : `Queue: ${snapshot.done}/${snapshot.total} done`}
+        Downloading {snapshot.done}/{snapshot.total}
       </span>
     </div>
   );
