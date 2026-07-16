@@ -134,3 +134,24 @@ func DedicatedServerInstalled(installRoot string) bool {
 	_, ok := FindDedicatedServerBinaryRel(installRoot)
 	return ok
 }
+
+// EnsureDedicatedServerBinariesExecutable sets the execute bit on arma3server*
+// binaries under installRoot. Steam depot downloads often omit FlagExecutable
+// (or skip rewriting unchanged files), which leaves Linux binaries non-executable.
+func EnsureDedicatedServerBinariesExecutable(installRoot string) {
+	for _, rel := range ListDedicatedServerBinaryRels(installRoot) {
+		path := filepath.Join(installRoot, filepath.FromSlash(rel))
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		mode := info.Mode()
+		if mode&0o111 == 0o111 {
+			continue
+		}
+		if err := os.Chmod(path, mode|0o111); err != nil {
+			// Best-effort: Start will surface permission errors if this fails.
+			continue
+		}
+	}
+}

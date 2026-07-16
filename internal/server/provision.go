@@ -26,6 +26,8 @@ func ProvisionServer(serverID int) error {
 	if !IsBranchInstalled(branch.InstallPath) {
 		return fmt.Errorf("branch %q is not installed", branch.Name)
 	}
+	// Fix missing +x from Steam depot downloads (common on Linux).
+	utils.EnsureDedicatedServerBinariesExecutable(branch.InstallPath)
 
 	instanceDir := InstanceDir(srv.Slug)
 	if err := os.MkdirAll(instanceDir, 0755); err != nil {

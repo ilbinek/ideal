@@ -11,6 +11,7 @@ import (
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/steam"
+	"arma3modmanager/internal/utils"
 )
 
 // BranchInstallSnapshot is the install progress for a branch.
@@ -231,6 +232,7 @@ func (b *BranchInstaller) runInstall(branchID int) {
 
 	gameDir := BranchGameDir(branch.InstallPath)
 	log.Printf("[BRANCH] install complete — game files at %s", gameDir)
+	utils.EnsureDedicatedServerBinariesExecutable(branch.InstallPath)
 	if err := database.SetBranchInstalled(branchID, true, depot.ReadInstalledBuildID(branch.InstallPath)); err != nil {
 		log.Printf("[BRANCH] failed to update branch status: %v", err)
 	}
