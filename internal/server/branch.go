@@ -151,6 +151,17 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	}
 	log.Printf("[BRANCH] installing branch %q (steam beta %q) via %s to %s", branch.Name, branch.SteamBranch, backend, installDir)
 
+	// Update of an existing install: force full CDN manifest re-check (gosteam VerifyAll;
+	// SteamCMD already always uses "validate").
+	verifyAll := branch.Installed || IsBranchInstalled(branch.InstallPath)
+	if verifyAll {
+		b.mu.Lock()
+		b.message = "Verifying and updating..."
+		b.mu.Unlock()
+		b.broadcast()
+		log.Printf("[BRANCH] verify-all enabled for existing install at %s", installDir)
+	}
+
 	progressChan := make(chan depot.ProgressUpdate, 100)
 	installDone := make(chan error, 1)
 	go func() {
@@ -170,6 +181,7 @@ func (b *BranchInstaller) runInstall(branchID int) {
 				AppID:       depot.DedicatedServerAppIDNum,
 				SteamBranch: branch.SteamBranch,
 				InstallDir:  installDir,
+				VerifyAll:   verifyAll,
 			}, progressChan)
 			return
 		}
@@ -199,34 +211,35 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	}
 
 	installErr := <-installDone
-	installed := IsBranchInstalled(branch.InstallPath)
-
-	if installed {
-		gameDir := BranchGameDir(branch.InstallPath)
-		log.Printf("[BRANCH] install complete — game files at %s", gameDir)
-		if err := database.SetBranchInstalled(branchID, true, depot.ReadInstalledBuildID(branch.InstallPath)); err != nil {
-			log.Printf("[BRANCH] failed to update branch status: %v", err)
-		}
-		b.mu.Lock()
-		b.message = "Install complete"
-		b.percentage = 100
-		b.errMsg = ""
-		b.mu.Unlock()
-		b.broadcast()
-		return
-	}
-
 	if installErr != nil {
+		// Prefer the real download/update failure even if an older server binary
+		// is still on disk (e.g. CDN HTTP 503 mid-update).
 		b.setError(installErr.Error())
 		return
 	}
-	abs, _ := filepath.Abs(branch.InstallPath)
-	b.setError(fmt.Sprintf("install finished but server binary not found in %s", abs))
-	if !useGoSteam {
-		if alt := depot.FindSteamCmdDedicatedServerDir(config.SteamCmdPath); alt != "" {
-			log.Printf("[BRANCH] server files may have been downloaded to SteamCMD library: %s", alt)
+
+	if !IsBranchInstalled(branch.InstallPath) {
+		abs, _ := filepath.Abs(branch.InstallPath)
+		b.setError(fmt.Sprintf("install finished but server binary not found in %s", abs))
+		if !useGoSteam {
+			if alt := depot.FindSteamCmdDedicatedServerDir(config.SteamCmdPath); alt != "" {
+				log.Printf("[BRANCH] server files may have been downloaded to SteamCMD library: %s", alt)
+			}
 		}
+		return
 	}
+
+	gameDir := BranchGameDir(branch.InstallPath)
+	log.Printf("[BRANCH] install complete — game files at %s", gameDir)
+	if err := database.SetBranchInstalled(branchID, true, depot.ReadInstalledBuildID(branch.InstallPath)); err != nil {
+		log.Printf("[BRANCH] failed to update branch status: %v", err)
+	}
+	b.mu.Lock()
+	b.message = "Install complete"
+	b.percentage = 100
+	b.errMsg = ""
+	b.mu.Unlock()
+	b.broadcast()
 }
 
 func (b *BranchInstaller) setError(msg string) {

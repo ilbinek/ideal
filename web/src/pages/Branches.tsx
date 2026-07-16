@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { useToast } from "@/components/ui/toast";
 import {
   Card,
   CardContent,
@@ -28,6 +29,7 @@ import * as React from "react";
 
 export function Branches() {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const installSnap = useBranchInstall();
   const [newName, setNewName] = useState("");
   const [newSteamBranch, setNewSteamBranch] = useState("");
@@ -42,14 +44,18 @@ export function Branches() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["branches"] }),
   });
 
-  // Refresh branches when install completes
+  // Refresh on success; toast when async install fails (e.g. Steam not logged in)
   const prevInstalling = React.useRef(installSnap.installing);
   React.useEffect(() => {
-    if (prevInstalling.current && !installSnap.installing && !installSnap.error) {
-      queryClient.invalidateQueries({ queryKey: ["branches"] });
+    if (prevInstalling.current && !installSnap.installing) {
+      if (installSnap.error) {
+        toast.error("Branch install failed", installSnap.error);
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["branches"] });
+      }
     }
     prevInstalling.current = installSnap.installing;
-  }, [installSnap.installing, installSnap.error, queryClient]);
+  }, [installSnap.installing, installSnap.error, queryClient, toast]);
 
   const create = useMutation({
     mutationFn: () => api.createBranch(newName, newSteamBranch),
@@ -72,7 +78,7 @@ export function Branches() {
           <h1 className="text-2xl font-semibold">Branches</h1>
           <p className="text-sm text-muted-foreground">
             Central Arma 3 dedicated server installs (built-in downloader by default;
-            override in Settings).
+            override in Settings). Update re-checks installed files against the CDN.
           </p>
         </div>
         <Button variant="outline" asChild>
@@ -80,11 +86,11 @@ export function Branches() {
         </Button>
       </div>
 
-      {installSnap.installing && (
+      {(installSnap.installing || !!installSnap.error) && (
         <Card>
           <CardContent className="flex flex-col gap-2 pt-6">
-            <p className="text-sm">{installSnap.message}</p>
-            <Progress value={installSnap.percentage} />
+            <p className="text-sm">{installSnap.message || (installSnap.error ? "Install failed" : "")}</p>
+            {installSnap.installing && <Progress value={installSnap.percentage} />}
             {installSnap.error && (
               <p className="text-sm text-destructive">{installSnap.error}</p>
             )}

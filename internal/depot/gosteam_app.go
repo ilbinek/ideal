@@ -25,6 +25,9 @@ type AppUpdateGoSteamOptions struct {
 	AppID       uint32 // empty/0 => DedicatedServerAppIDNum
 	SteamBranch string // empty = public
 	InstallDir  string
+	// VerifyAll re-checks every chunk against the CDN manifest (gosteam --verify-all).
+	// Without it, files whose manifest SHA is unchanged are skipped entirely.
+	VerifyAll bool
 }
 
 // AppUpdateGoSteam installs or updates a Steam app via the built-in gosteam
@@ -105,10 +108,11 @@ func AppUpdateGoSteam(
 	}
 
 	ad, err := downloader.NewApp(ctx, sess, store, downloader.AppConfig{
-		AppID:  appID,
-		Branch: opts.SteamBranch,
-		OutDir: installDir,
-		Prune:  true,
+		AppID:     appID,
+		Branch:    opts.SteamBranch,
+		OutDir:    installDir,
+		Prune:     true,
+		VerifyAll: opts.VerifyAll,
 		OnProgress: func(p downloader.AppProgress) {
 			key := downloader.FormatDepotKey(p.Depot)
 			progMu.Lock()
