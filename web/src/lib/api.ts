@@ -1,4 +1,5 @@
 import type {
+  AppUser,
   ArmaBranch,
   CdlcCatalog,
   Downloader,
@@ -16,6 +17,7 @@ import type {
   ServerKeysResponse,
   ServerMod,
   ServerStatusSnapshot,
+  Session,
   Settings,
   StartupCommand,
   SteamLoginState,
@@ -64,13 +66,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   // Auth
-  session: () => request<{ authenticated: boolean }>("/api/session"),
+  session: () => request<Session>("/api/session"),
   login: (password: string) =>
     request<{ ok: boolean }>("/api/login", {
       method: "POST",
       body: JSON.stringify({ password }),
     }),
   logout: () => request<{ ok: boolean }>("/api/logout", { method: "POST" }),
+
+  // Users
+  getUsers: () => request<AppUser[]>("/api/users"),
+  updateUser: (
+    id: number,
+    body: {
+      isFullAdmin: boolean;
+      canManageMods: boolean;
+      canManageBranches: boolean;
+      serverIds: number[];
+    },
+  ) =>
+    request<AppUser>(`/api/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteUser: (id: number) =>
+    request<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
 
   // Settings
   getSettings: () => request<Settings>("/api/settings"),

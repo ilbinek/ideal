@@ -106,7 +106,7 @@ A Steam Web API key (Settings) is used for update checks.
    ./ideal
    ```
 4. Open `http://localhost:8080` (or the port in `config.json`)
-5. Log in with the password you set
+5. Log in with the password you set (or enable `steamLoginEnabled` and use Steam)
 
 ---
 
@@ -117,11 +117,27 @@ A Steam Web API key (Settings) is used for update checks.
 ```json
 {
   "password": "changeme",
-  "port": "8080"
+  "port": "8080",
+  "steamLoginEnabled": false,
+  "publicUrl": ""
 }
 ```
 
+| Field | Purpose |
+|---|---|
+| `password` | Bootstrap admin password (password login). Always has full access. |
+| `port` | HTTP listen port (unless overridden by `IDEAL_LISTEN`). |
+| `steamLoginEnabled` | When `true`, users can sign in with Steam OpenID (“Sign in through Steam”). |
+| `publicUrl` | Optional absolute site URL (e.g. `https://mods.example.com`) used for Steam OpenID return URLs behind a reverse proxy. Leave empty to derive from the request. |
+
 Steam credentials, downloader choice, and related options live in the SQLite database and are edited in the **Settings** UI — not in `config.json`.
+
+### Users and permissions
+
+- **Password admin** — logs in with `config.json` `password`; always full admin.
+- **Steam users** — appear after first Steam sign-in with no permissions until a full admin grants roles on the **Users** page.
+- **Roles:** full admin; manage mods; manage branches; per-server admin (assigned servers only).
+- Sessions are stored in SQLite and last 30 days (survive restarts).
 
 ### Environment variables
 
@@ -183,7 +199,7 @@ Point your A3Sync repository at that directory.
 ```
 .
 ├── ideal / ideal.exe     # Main executable (release) or under dist/ when built with Task
-├── config.json           # Web UI password + HTTP port
+├── config.json           # Admin password, port, Steam login toggle
 ├── arma3mods.db          # SQLite database
 ├── .gosteam/             # Built-in downloader token/cache
 ├── mods/                 # Workshop mods (<workshopId>/)

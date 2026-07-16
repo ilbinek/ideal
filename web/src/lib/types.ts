@@ -73,6 +73,43 @@ export interface StartupCommand {
 
 export type DownloadScope = "all" | "outdated" | "missing";
 
+export interface SessionUser {
+  id: number;
+  steamId: string;
+  displayName: string;
+  avatarUrl: string;
+}
+
+export interface SessionPermissions {
+  isFullAdmin: boolean;
+  canManageMods: boolean;
+  canManageBranches: boolean;
+  serverIds: number[];
+  canAccessServers: boolean;
+  hasAnyAccess: boolean;
+}
+
+export interface Session {
+  authenticated: boolean;
+  steamLoginEnabled: boolean;
+  subjectType?: "password_admin" | "user";
+  user?: SessionUser;
+  permissions?: SessionPermissions;
+}
+
+export interface AppUser {
+  id: number;
+  steamId: string;
+  displayName: string;
+  avatarUrl: string;
+  isFullAdmin: boolean;
+  canManageMods: boolean;
+  canManageBranches: boolean;
+  serverIds: number[];
+  createdAt: string;
+  lastLoginAt: string;
+}
+
 export interface ArmaBranch {
   id: number;
   name: string;

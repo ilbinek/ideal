@@ -36,7 +36,7 @@ func LoginAPIHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "Invalid password")
 		return
 	}
-	if err := auth.CreateSession(w); err != nil {
+	if err := auth.CreatePasswordAdminSession(w, r); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
@@ -49,7 +49,45 @@ func LogoutAPIHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func SessionHandler(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": auth.ValidateSession(r)})
+	p := auth.LoadPrincipal(r)
+	resp := map[string]interface{}{
+		"authenticated":     p != nil,
+		"steamLoginEnabled": auth.SteamLoginEnabled(),
+	}
+	if p == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	serverIDs := p.ServerIDs
+	if serverIDs == nil {
+		serverIDs = []int{}
+	}
+	resp["subjectType"] = p.SubjectType
+	resp["permissions"] = map[string]interface{}{
+		"isFullAdmin":       p.IsFullAdmin,
+		"canManageMods":     p.CanManageMods,
+		"canManageBranches": p.CanManageBranches,
+		"serverIds":         serverIDs,
+		"canAccessServers":  p.CanAccessServers(),
+		"hasAnyAccess":      p.HasAnyAccess(),
+	}
+	if p.SubjectType == database.SubjectUser {
+		resp["user"] = map[string]interface{}{
+			"id":          p.UserID,
+			"steamId":     p.SteamID,
+			"displayName": p.DisplayName,
+			"avatarUrl":   p.AvatarURL,
+		}
+	} else {
+		resp["user"] = map[string]interface{}{
+			"id":          0,
+			"steamId":     "",
+			"displayName": p.DisplayName,
+			"avatarUrl":   "",
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // --- Settings ---

@@ -123,7 +123,10 @@ func migrate() error {
 			return err
 		}
 	}
-	return migrateServers()
+	if err := migrateServers(); err != nil {
+		return err
+	}
+	return migrateUsers()
 }
 
 func Close() error {

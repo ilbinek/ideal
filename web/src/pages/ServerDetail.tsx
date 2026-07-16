@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
+import { permissionsOf, useSession } from "@/hooks/useSession";
 import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
 import { formatDate, formatBytes, formatCpuPercent, formatBytesPerSec, cpuGaugeFill, memoryGaugeFill, formatMemoryOfHost } from "@/lib/utils";
 import { HalfCircleGauge } from "@/components/HalfCircleGauge";
@@ -61,6 +62,8 @@ export function ServerDetail() {
   const serverId = parseInt(id ?? "0", 10);
   const queryClient = useQueryClient();
   const { statusFor } = useServers();
+  const { data: session } = useSession();
+  const perms = permissionsOf(session);
   const [tab, setTab] = useState<Tab>("overview");
 
   const server = useQuery({
@@ -196,16 +199,18 @@ export function ServerDetail() {
           >
             <RotateCcw className="size-3.5" /> Restart
           </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            disabled={isRunning || del.isPending}
-            onClick={() => {
-              if (confirm("Delete this server and its instance folder?")) del.mutate();
-            }}
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
+          {perms.isFullAdmin && (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={isRunning || del.isPending}
+              onClick={() => {
+                if (confirm("Delete this server and its instance folder?")) del.mutate();
+              }}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 

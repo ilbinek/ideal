@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"arma3modmanager/internal/auth"
 )
@@ -20,124 +21,216 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("POST /api/login", LoginAPIHandler)
 	mux.HandleFunc("POST /api/logout", LogoutAPIHandler)
 	mux.HandleFunc("GET /api/session", SessionHandler)
+	mux.HandleFunc("GET /api/auth/steam", auth.SteamOpenIDStartHandler)
+	mux.HandleFunc("GET /api/auth/steam/callback", auth.SteamOpenIDCallbackHandler)
 
-	// Settings
-	mux.HandleFunc("GET /api/settings", apiAuth(GetSettingsHandler))
-	mux.HandleFunc("POST /api/settings", apiAuth(SaveSettingsAPIHandler))
+	// Users (full admin)
+	mux.HandleFunc("GET /api/users", apiFullAdmin(ListUsersHandler))
+	mux.HandleFunc("PATCH /api/users/{id}", apiFullAdmin(UpdateUserHandler))
+	mux.HandleFunc("DELETE /api/users/{id}", apiFullAdmin(DeleteUserHandler))
 
-	// Steam login (built-in gosteam downloader)
-	mux.HandleFunc("GET /api/steam/status", apiAuth(SteamStatusHandler))
-	mux.HandleFunc("GET /api/steam/login/stream", apiAuth(SteamLoginStreamHandler))
-	mux.HandleFunc("POST /api/steam/login", apiAuth(SteamLoginHandler))
-	mux.HandleFunc("POST /api/steam/login/guard", apiAuth(SteamGuardHandler))
-	mux.HandleFunc("POST /api/steam/logout", apiAuth(SteamLogoutHandler))
+	// Settings (full admin)
+	mux.HandleFunc("GET /api/settings", apiFullAdmin(GetSettingsHandler))
+	mux.HandleFunc("POST /api/settings", apiFullAdmin(SaveSettingsAPIHandler))
 
-	// Modsets
-	mux.HandleFunc("GET /api/modsets", apiAuth(GetModsetsHandler))
-	mux.HandleFunc("POST /api/modsets/upload", apiAuth(UploadModsetAPIHandler))
-	mux.HandleFunc("DELETE /api/modsets/{id}", apiAuth(DeleteModsetAPIHandler))
-	mux.HandleFunc("DELETE /api/modsets/{id}/mods/{modId}", apiAuth(RemoveModFromModsetAPIHandler))
+	// Steam login (built-in gosteam downloader) — full admin
+	mux.HandleFunc("GET /api/steam/status", apiFullAdmin(SteamStatusHandler))
+	mux.HandleFunc("GET /api/steam/login/stream", apiFullAdmin(SteamLoginStreamHandler))
+	mux.HandleFunc("POST /api/steam/login", apiFullAdmin(SteamLoginHandler))
+	mux.HandleFunc("POST /api/steam/login/guard", apiFullAdmin(SteamGuardHandler))
+	mux.HandleFunc("POST /api/steam/logout", apiFullAdmin(SteamLogoutHandler))
 
-	// Mods
-	mux.HandleFunc("GET /api/mods", apiAuth(GetModsHandler))
-	mux.HandleFunc("GET /api/mods/{id}", apiAuth(GetModHandler))
-	mux.HandleFunc("POST /api/mods", apiAuth(AddModAPIHandler))
-	mux.HandleFunc("POST /api/mods/bulk-delete", apiAuth(BulkDeleteModsHandler))
-	mux.HandleFunc("DELETE /api/mods/{id}", apiAuth(DeleteModAPIHandler))
-	mux.HandleFunc("POST /api/mods/check-updates", apiAuth(CheckUpdatesAPIHandler))
-	mux.HandleFunc("POST /api/mods/{id}/download", apiAuth(DownloadModAPIHandler))
+	// Modsets — read for server admins (pickers); write for mods role
+	mux.HandleFunc("GET /api/modsets", apiModsRead(GetModsetsHandler))
+	mux.HandleFunc("POST /api/modsets/upload", apiMods(UploadModsetAPIHandler))
+	mux.HandleFunc("DELETE /api/modsets/{id}", apiMods(DeleteModsetAPIHandler))
+	mux.HandleFunc("DELETE /api/modsets/{id}/mods/{modId}", apiMods(RemoveModFromModsetAPIHandler))
 
-	// Download queue
-	mux.HandleFunc("POST /api/downloads/enqueue", apiAuth(EnqueueDownloadsHandler))
-	mux.HandleFunc("GET /api/downloads/status", apiAuth(DownloadStatusHandler))
-	mux.HandleFunc("GET /api/downloads/stream", apiAuth(DownloadStreamHandler))
+	// Mods — read for server admins; write for mods role
+	mux.HandleFunc("GET /api/mods", apiModsRead(GetModsHandler))
+	mux.HandleFunc("GET /api/mods/{id}", apiModsRead(GetModHandler))
+	mux.HandleFunc("POST /api/mods", apiMods(AddModAPIHandler))
+	mux.HandleFunc("POST /api/mods/bulk-delete", apiMods(BulkDeleteModsHandler))
+	mux.HandleFunc("DELETE /api/mods/{id}", apiMods(DeleteModAPIHandler))
+	mux.HandleFunc("POST /api/mods/check-updates", apiMods(CheckUpdatesAPIHandler))
+	mux.HandleFunc("POST /api/mods/{id}/download", apiMods(DownloadModAPIHandler))
 
-	// A3Sync + startup command
-	mux.HandleFunc("POST /api/a3sync/generate", apiAuth(GenerateA3SyncAPIHandler))
-	mux.HandleFunc("GET /api/startup-command", apiAuth(StartupCommandAPIHandler))
+	// Download queue — mods role
+	mux.HandleFunc("POST /api/downloads/enqueue", apiMods(EnqueueDownloadsHandler))
+	mux.HandleFunc("GET /api/downloads/status", apiMods(DownloadStatusHandler))
+	mux.HandleFunc("GET /api/downloads/stream", apiMods(DownloadStreamHandler))
 
-	// Branches
-	mux.HandleFunc("GET /api/branches", apiAuth(GetBranchesHandler))
-	mux.HandleFunc("POST /api/branches", apiAuth(CreateBranchHandler))
-	mux.HandleFunc("DELETE /api/branches/{id}", apiAuth(DeleteBranchHandler))
-	mux.HandleFunc("POST /api/branches/{id}/install", apiAuth(InstallBranchHandler))
-	mux.HandleFunc("GET /api/branches/{id}/binaries", apiAuth(ListBranchBinariesHandler))
-	mux.HandleFunc("GET /api/branches/install/stream", apiAuth(BranchInstallStreamHandler))
-	mux.HandleFunc("GET /api/cdlcs", apiAuth(GetCdlcsHandler))
+	// A3Sync + startup command — mods role
+	mux.HandleFunc("POST /api/a3sync/generate", apiMods(GenerateA3SyncAPIHandler))
+	mux.HandleFunc("GET /api/startup-command", apiMods(StartupCommandAPIHandler))
+
+	// Branches — read for server admins (name/binary pickers); write for branches role
+	mux.HandleFunc("GET /api/branches", apiBranchesRead(GetBranchesHandler))
+	mux.HandleFunc("POST /api/branches", apiBranches(CreateBranchHandler))
+	mux.HandleFunc("DELETE /api/branches/{id}", apiBranches(DeleteBranchHandler))
+	mux.HandleFunc("POST /api/branches/{id}/install", apiBranches(InstallBranchHandler))
+	mux.HandleFunc("GET /api/branches/{id}/binaries", apiBranchesRead(ListBranchBinariesHandler))
+	mux.HandleFunc("GET /api/branches/install/stream", apiBranches(BranchInstallStreamHandler))
+	mux.HandleFunc("GET /api/cdlcs", apiBranchesRead(GetCdlcsHandler))
 
 	// Servers
 	mux.HandleFunc("GET /api/servers", apiAuth(GetServersHandler))
-	mux.HandleFunc("POST /api/servers", apiAuth(CreateServerHandler))
+	mux.HandleFunc("POST /api/servers", apiFullAdmin(CreateServerHandler))
 	mux.HandleFunc("GET /api/servers/stream", apiAuth(ServersStreamHandler))
-	mux.HandleFunc("GET /api/servers/{id}", apiAuth(GetServerHandler))
-	mux.HandleFunc("PUT /api/servers/{id}", apiAuth(UpdateServerHandler))
-	mux.HandleFunc("DELETE /api/servers/{id}", apiAuth(DeleteServerHandler))
-	mux.HandleFunc("POST /api/servers/{id}/provision", apiAuth(ProvisionServerHandler))
-	mux.HandleFunc("POST /api/servers/{id}/start", apiAuth(StartServerHandler))
-	mux.HandleFunc("POST /api/servers/{id}/stop", apiAuth(StopServerHandler))
-	mux.HandleFunc("POST /api/servers/{id}/restart", apiAuth(RestartServerHandler))
-	mux.HandleFunc("GET /api/servers/{id}/status", apiAuth(ServerStatusHandler))
-	mux.HandleFunc("GET /api/servers/{id}/launch", apiAuth(ServerLaunchPreviewHandler))
+	mux.HandleFunc("GET /api/servers/{id}", apiServerAdmin(GetServerHandler))
+	mux.HandleFunc("PUT /api/servers/{id}", apiServerAdmin(UpdateServerHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}", apiFullAdmin(DeleteServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/provision", apiServerAdmin(ProvisionServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/start", apiServerAdmin(StartServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/stop", apiServerAdmin(StopServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/restart", apiServerAdmin(RestartServerHandler))
+	mux.HandleFunc("GET /api/servers/{id}/status", apiServerAdmin(ServerStatusHandler))
+	mux.HandleFunc("GET /api/servers/{id}/launch", apiServerAdmin(ServerLaunchPreviewHandler))
 
 	// Server mods
-	mux.HandleFunc("GET /api/servers/{id}/mods", apiAuth(GetServerModsHandler))
-	mux.HandleFunc("PUT /api/servers/{id}/mods", apiAuth(PutServerModsHandler))
-	mux.HandleFunc("POST /api/localmods/discover", apiAuth(DiscoverLocalModsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/mods", apiServerAdmin(GetServerModsHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/mods", apiServerAdmin(PutServerModsHandler))
+	mux.HandleFunc("POST /api/localmods/discover", apiAuth(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		if p == nil || !p.CanAccessServers() {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		DiscoverLocalModsHandler(w, r)
+	}))
 
 	// Server keys
-	mux.HandleFunc("GET /api/servers/{id}/keys", apiAuth(GetServerKeysHandler))
-	mux.HandleFunc("POST /api/servers/{id}/keys/rescan", apiAuth(RescanServerKeysHandler))
-	mux.HandleFunc("POST /api/servers/{id}/keys", apiAuth(UploadServerKeyHandler))
-	mux.HandleFunc("DELETE /api/servers/{id}/keys/{keyId}", apiAuth(DeleteServerKeyHandler))
+	mux.HandleFunc("GET /api/servers/{id}/keys", apiServerAdmin(GetServerKeysHandler))
+	mux.HandleFunc("POST /api/servers/{id}/keys/rescan", apiServerAdmin(RescanServerKeysHandler))
+	mux.HandleFunc("POST /api/servers/{id}/keys", apiServerAdmin(UploadServerKeyHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/keys/{keyId}", apiServerAdmin(DeleteServerKeyHandler))
 
 	// Server config
-	mux.HandleFunc("GET /api/servers/{id}/config/{name}", apiAuth(GetServerConfigHandler))
-	mux.HandleFunc("PUT /api/servers/{id}/config/{name}", apiAuth(PutServerConfigHandler))
-	mux.HandleFunc("GET /api/servers/{id}/profile/files", apiAuth(ListProfileFilesHandler))
-	mux.HandleFunc("GET /api/servers/{id}/profile/{filename}", apiAuth(GetProfileFileHandler))
-	mux.HandleFunc("PUT /api/servers/{id}/profile/{filename}", apiAuth(PutProfileFileHandler))
+	mux.HandleFunc("GET /api/servers/{id}/config/{name}", apiServerAdmin(GetServerConfigHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/config/{name}", apiServerAdmin(PutServerConfigHandler))
+	mux.HandleFunc("GET /api/servers/{id}/profile/files", apiServerAdmin(ListProfileFilesHandler))
+	mux.HandleFunc("GET /api/servers/{id}/profile/{filename}", apiServerAdmin(GetProfileFileHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/profile/{filename}", apiServerAdmin(PutProfileFileHandler))
 
 	// Server logs
-	mux.HandleFunc("GET /api/servers/{id}/logs", apiAuth(ListServerLogsHandler))
-	mux.HandleFunc("GET /api/servers/{id}/logs/stream", apiAuth(ServerLogStreamHandler))
-	mux.HandleFunc("POST /api/servers/{id}/logs/delete", apiAuth(DeleteServerLogsHandler))
-	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}/download", apiAuth(DownloadServerLogHandler))
-	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}", apiAuth(GetServerLogHandler))
-	mux.HandleFunc("DELETE /api/servers/{id}/logs/{filename}", apiAuth(DeleteServerLogHandler))
+	mux.HandleFunc("GET /api/servers/{id}/logs", apiServerAdmin(ListServerLogsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/logs/stream", apiServerAdmin(ServerLogStreamHandler))
+	mux.HandleFunc("POST /api/servers/{id}/logs/delete", apiServerAdmin(DeleteServerLogsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}/download", apiServerAdmin(DownloadServerLogHandler))
+	mux.HandleFunc("GET /api/servers/{id}/logs/{filename}", apiServerAdmin(GetServerLogHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/logs/{filename}", apiServerAdmin(DeleteServerLogHandler))
 
 	// Headless clients
-	mux.HandleFunc("GET /api/servers/{id}/headless", apiAuth(GetHeadlessHandler))
-	mux.HandleFunc("PUT /api/servers/{id}/headless", apiAuth(PutHeadlessHandler))
-	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/start", apiAuth(StartHeadlessHandler))
-	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/stop", apiAuth(StopHeadlessHandler))
-	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/restart", apiAuth(RestartHeadlessHandler))
-	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs", apiAuth(ListHeadlessLogsHandler))
-	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/stream", apiAuth(HeadlessLogStreamHandler))
-	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/{filename}/download", apiAuth(DownloadHeadlessLogHandler))
-	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/{filename}", apiAuth(GetHeadlessLogHandler))
-	mux.HandleFunc("DELETE /api/servers/{id}/headless/{slot}/logs/{filename}", apiAuth(DeleteHeadlessLogHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless", apiServerAdmin(GetHeadlessHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/headless", apiServerAdmin(PutHeadlessHandler))
+	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/start", apiServerAdmin(StartHeadlessHandler))
+	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/stop", apiServerAdmin(StopHeadlessHandler))
+	mux.HandleFunc("POST /api/servers/{id}/headless/{slot}/restart", apiServerAdmin(RestartHeadlessHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs", apiServerAdmin(ListHeadlessLogsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/stream", apiServerAdmin(HeadlessLogStreamHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/{filename}/download", apiServerAdmin(DownloadHeadlessLogHandler))
+	mux.HandleFunc("GET /api/servers/{id}/headless/{slot}/logs/{filename}", apiServerAdmin(GetHeadlessLogHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/headless/{slot}/logs/{filename}", apiServerAdmin(DeleteHeadlessLogHandler))
 
 	// Missions
-	mux.HandleFunc("GET /api/servers/{id}/missions", apiAuth(ListMissionsHandler))
-	mux.HandleFunc("POST /api/servers/{id}/missions/upload", apiAuth(UploadMissionHandler))
-	mux.HandleFunc("POST /api/servers/{id}/missions/delete", apiAuth(DeleteMissionsHandler))
-	mux.HandleFunc("PUT /api/servers/{id}/missions/http-serve", apiAuth(PutMissionHttpServeHandler))
-	mux.HandleFunc("GET /api/servers/{id}/missions/{name}/download", apiAuth(DownloadMissionHandler))
-	mux.HandleFunc("DELETE /api/servers/{id}/missions/{name}", apiAuth(DeleteMissionHandler))
+	mux.HandleFunc("GET /api/servers/{id}/missions", apiServerAdmin(ListMissionsHandler))
+	mux.HandleFunc("POST /api/servers/{id}/missions/upload", apiServerAdmin(UploadMissionHandler))
+	mux.HandleFunc("POST /api/servers/{id}/missions/delete", apiServerAdmin(DeleteMissionsHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/missions/http-serve", apiServerAdmin(PutMissionHttpServeHandler))
+	mux.HandleFunc("GET /api/servers/{id}/missions/{name}/download", apiServerAdmin(DownloadMissionHandler))
+	mux.HandleFunc("DELETE /api/servers/{id}/missions/{name}", apiServerAdmin(DeleteMissionHandler))
 
 	return mux
 }
 
-// apiAuth wraps a handler so unauthenticated requests get a JSON 401 instead of
-// a redirect (the SPA reacts to 401 by routing to the login page).
-func apiAuth(next http.HandlerFunc) http.HandlerFunc {
+func attachPrincipal(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !auth.ValidateSession(r) {
+		p := auth.LoadPrincipalAndRenew(w, r)
+		if p == nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(auth.WithPrincipal(r.Context(), p)))
 	}
+}
+
+// apiAuth requires any valid session and attaches Principal to the request context.
+func apiAuth(next http.HandlerFunc) http.HandlerFunc {
+	return attachPrincipal(next)
+}
+
+func apiFullAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return attachPrincipal(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		if p == nil || !p.IsFullAdmin {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next(w, r)
+	})
+}
+
+func apiMods(next http.HandlerFunc) http.HandlerFunc {
+	return attachPrincipal(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		if p == nil || !p.CanManageMods {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next(w, r)
+	})
+}
+
+// apiModsRead allows mod catalog reads for mod managers and server admins.
+func apiModsRead(next http.HandlerFunc) http.HandlerFunc {
+	return attachPrincipal(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		if p == nil || (!p.CanManageMods && !p.CanAccessServers()) {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next(w, r)
+	})
+}
+
+func apiBranches(next http.HandlerFunc) http.HandlerFunc {
+	return attachPrincipal(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		if p == nil || !p.CanManageBranches {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next(w, r)
+	})
+}
+
+// apiBranchesRead allows branch catalog reads for branch managers and server admins.
+func apiBranchesRead(next http.HandlerFunc) http.HandlerFunc {
+	return attachPrincipal(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		if p == nil || (!p.CanManageBranches && !p.CanAccessServers()) {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next(w, r)
+	})
+}
+
+// apiServerAdmin requires access to the server identified by path {id}.
+func apiServerAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return attachPrincipal(func(w http.ResponseWriter, r *http.Request) {
+		p := auth.FromContext(r.Context())
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid server id")
+			return
+		}
+		if p == nil || !p.HasServerAccess(id) {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

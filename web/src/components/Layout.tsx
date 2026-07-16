@@ -1,18 +1,22 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Boxes, Download, Home, LogOut, Package, Server, Settings } from "lucide-react";
+import {
+  Boxes,
+  Download,
+  Home,
+  LogOut,
+  Package,
+  Server,
+  Settings,
+  Users,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { CookieNotice } from "@/components/CookieNotice";
 import { DownloadsProvider, useDownloads } from "@/hooks/useDownloads";
 import { ServersProvider } from "@/hooks/useServers";
-
-const navItems = [
-  { to: "/", label: "Dashboard", icon: Home, end: true },
-  { to: "/servers", label: "Servers", icon: Server },
-  { to: "/modsets", label: "Modsets", icon: Boxes },
-  { to: "/mods", label: "Mods", icon: Package },
-];
+import { permissionsOf, useSession } from "@/hooks/useSession";
 
 function QueueIndicator() {
   const { snapshot } = useDownloads();
@@ -34,6 +38,37 @@ function QueueIndicator() {
 function Shell() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { data: session } = useSession();
+  const perms = permissionsOf(session);
+
+  const navItems = [
+    { to: "/", label: "Dashboard", icon: Home, end: true, show: true },
+    {
+      to: "/servers",
+      label: "Servers",
+      icon: Server,
+      show: perms.canAccessServers,
+    },
+    {
+      to: "/modsets",
+      label: "Modsets",
+      icon: Boxes,
+      show: perms.canManageMods,
+    },
+    {
+      to: "/mods",
+      label: "Mods",
+      icon: Package,
+      show: perms.canManageMods,
+    },
+    {
+      to: "/users",
+      label: "Users",
+      icon: Users,
+      show: perms.isFullAdmin,
+    },
+  ].filter((item) => item.show);
+
   const logout = useMutation({
     mutationFn: () => api.logout(),
     onSettled: () => {
@@ -74,19 +109,26 @@ function Shell() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-3">
-            <QueueIndicator />
-            <NavLink
-              to="/settings"
-              className={({ isActive }) =>
-                cn(
-                  "rounded-md p-2 transition-colors hover:bg-accent hover:text-foreground",
-                  isActive ? "text-foreground" : "text-muted-foreground",
-                )
-              }
-              title="Settings"
-            >
-              <Settings className="size-4" />
-            </NavLink>
+            {perms.canManageMods && <QueueIndicator />}
+            {session?.user?.displayName && (
+              <span className="hidden text-xs text-muted-foreground md:inline">
+                {session.user.displayName}
+              </span>
+            )}
+            {perms.isFullAdmin && (
+              <NavLink
+                to="/settings"
+                className={({ isActive }) =>
+                  cn(
+                    "rounded-md p-2 transition-colors hover:bg-accent hover:text-foreground",
+                    isActive ? "text-foreground" : "text-muted-foreground",
+                  )
+                }
+                title="Settings"
+              >
+                <Settings className="size-4" />
+              </NavLink>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -101,16 +143,21 @@ function Shell() {
       <main className="mx-auto max-w-6xl px-4 py-8">
         <Outlet />
       </main>
+      <CookieNotice />
     </div>
   );
 }
 
 export function Layout() {
-  return (
-    <DownloadsProvider>
-      <ServersProvider>
-        <Shell />
-      </ServersProvider>
-    </DownloadsProvider>
-  );
+  const { data: session } = useSession();
+  const perms = permissionsOf(session);
+
+  let content = <Shell />;
+  if (perms.canAccessServers) {
+    content = <ServersProvider>{content}</ServersProvider>;
+  }
+  if (perms.canManageMods) {
+    content = <DownloadsProvider>{content}</DownloadsProvider>;
+  }
+  return content;
 }

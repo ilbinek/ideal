@@ -22,6 +22,9 @@ import { ServerCreate } from "@/pages/ServerCreate";
 import { ServerDetail } from "@/pages/ServerDetail";
 import { Branches } from "@/pages/Branches";
 import { StartupCommand } from "@/pages/StartupCommand";
+import { UsersPage } from "@/pages/Users";
+import { permissionsOf } from "@/hooks/useSession";
+import type { SessionPermissions } from "@/lib/types";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -51,6 +54,22 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RequirePerm({
+  allow,
+  children,
+}: {
+  allow: (p: SessionPermissions) => boolean;
+  children: React.ReactNode;
+}) {
+  const { data } = useQuery({
+    queryKey: ["session"],
+    queryFn: () => api.session(),
+  });
+  const perms = permissionsOf(data);
+  if (!allow(perms)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -66,15 +85,86 @@ export default function App() {
               }
             >
               <Route path="/" element={<Dashboard />} />
-              <Route path="/modsets" element={<Modsets />} />
-              <Route path="/mods" element={<Mods />} />
-              <Route path="/mods/:id" element={<ModDetail />} />
-              <Route path="/servers" element={<Servers />} />
-              <Route path="/servers/new" element={<ServerCreate />} />
-              <Route path="/servers/:id" element={<ServerDetail />} />
-              <Route path="/branches" element={<Branches />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/startup-command" element={<StartupCommand />} />
+              <Route
+                path="/modsets"
+                element={
+                  <RequirePerm allow={(p) => p.canManageMods}>
+                    <Modsets />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/mods"
+                element={
+                  <RequirePerm allow={(p) => p.canManageMods}>
+                    <Mods />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/mods/:id"
+                element={
+                  <RequirePerm allow={(p) => p.canManageMods}>
+                    <ModDetail />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/servers"
+                element={
+                  <RequirePerm allow={(p) => p.canAccessServers}>
+                    <Servers />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/servers/new"
+                element={
+                  <RequirePerm allow={(p) => p.isFullAdmin}>
+                    <ServerCreate />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/servers/:id"
+                element={
+                  <RequirePerm allow={(p) => p.canAccessServers}>
+                    <ServerDetail />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/branches"
+                element={
+                  <RequirePerm allow={(p) => p.canManageBranches}>
+                    <Branches />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <RequirePerm allow={(p) => p.isFullAdmin}>
+                    <SettingsPage />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/users"
+                element={
+                  <RequirePerm allow={(p) => p.isFullAdmin}>
+                    <UsersPage />
+                  </RequirePerm>
+                }
+              />
+              <Route
+                path="/startup-command"
+                element={
+                  <RequirePerm allow={(p) => p.canManageMods}>
+                    <StartupCommand />
+                  </RequirePerm>
+                }
+              />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

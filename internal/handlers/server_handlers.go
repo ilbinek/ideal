@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"arma3modmanager/internal/auth"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/utils"
@@ -171,7 +172,29 @@ func GetServersHandler(w http.ResponseWriter, r *http.Request) {
 	if servers == nil {
 		servers = []database.Server{}
 	}
+	p := auth.FromContext(r.Context())
+	servers = filterServersForPrincipal(servers, p)
 	writeJSON(w, http.StatusOK, servers)
+}
+
+func filterServersForPrincipal(servers []database.Server, p *auth.Principal) []database.Server {
+	if p == nil {
+		return []database.Server{}
+	}
+	if p.IsFullAdmin {
+		return servers
+	}
+	allowed := make(map[int]struct{}, len(p.ServerIDs))
+	for _, id := range p.ServerIDs {
+		allowed[id] = struct{}{}
+	}
+	out := make([]database.Server, 0, len(p.ServerIDs))
+	for _, s := range servers {
+		if _, ok := allowed[s.ID]; ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
@@ -432,6 +455,7 @@ func ServersStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	p := auth.FromContext(r.Context())
 	ch := server.Default.Subscribe()
 	defer server.Default.Unsubscribe(ch)
 
@@ -443,7 +467,8 @@ func ServersStreamHandler(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			data, err := json.Marshal(snap)
+			filtered := filterStatusSnapshot(snap, p)
+			data, err := json.Marshal(filtered)
 			if err != nil {
 				continue
 			}
@@ -451,6 +476,26 @@ func ServersStreamHandler(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func filterStatusSnapshot(snap server.AllStatusSnapshot, p *auth.Principal) server.AllStatusSnapshot {
+	if p == nil {
+		return server.AllStatusSnapshot{Servers: []server.StatusSnapshot{}}
+	}
+	if p.IsFullAdmin {
+		return snap
+	}
+	allowed := make(map[int]struct{}, len(p.ServerIDs))
+	for _, id := range p.ServerIDs {
+		allowed[id] = struct{}{}
+	}
+	out := make([]server.StatusSnapshot, 0)
+	for _, s := range snap.Servers {
+		if _, ok := allowed[s.ID]; ok {
+			out = append(out, s)
+		}
+	}
+	return server.AllStatusSnapshot{Servers: out}
 }
 
 func ServerLaunchPreviewHandler(w http.ResponseWriter, r *http.Request) {

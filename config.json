@@ -1,4 +1,6 @@
 {
   "password": "changeme",
-  "port": "8080"
+  "port": "8080",
+  "steamLoginEnabled": true,
+  "publicUrl": ""
 }

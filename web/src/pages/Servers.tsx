@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
+import { permissionsOf, useSession } from "@/hooks/useSession";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -40,6 +41,8 @@ export function Servers() {
   const queryClient = useQueryClient();
   const { statusFor } = useServers();
   const [actionError, setActionError] = useState("");
+  const { data: session } = useSession();
+  const perms = permissionsOf(session);
 
   const servers = useQuery({ queryKey: ["servers"], queryFn: () => api.getServers() });
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
@@ -94,15 +97,19 @@ export function Servers() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" asChild>
-            <Link to="/branches">Branches</Link>
-          </Button>
-          <Button asChild>
-            <Link to="/servers/new">
-              <Plus className="size-4" />
-              New server
-            </Link>
-          </Button>
+          {perms.canManageBranches && (
+            <Button variant="outline" asChild>
+              <Link to="/branches">Branches</Link>
+            </Button>
+          )}
+          {perms.isFullAdmin && (
+            <Button asChild>
+              <Link to="/servers/new">
+                <Plus className="size-4" />
+                New server
+              </Link>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -128,10 +135,14 @@ export function Servers() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex gap-2">
-            <Button variant="outline" onClick={() => navigate("/branches")}>
-              Manage branches
-            </Button>
-            <Button onClick={() => navigate("/servers/new")}>Create server</Button>
+            {perms.canManageBranches && (
+              <Button variant="outline" onClick={() => navigate("/branches")}>
+                Manage branches
+              </Button>
+            )}
+            {perms.isFullAdmin && (
+              <Button onClick={() => navigate("/servers/new")}>Create server</Button>
+            )}
           </CardContent>
         </Card>
       ) : (

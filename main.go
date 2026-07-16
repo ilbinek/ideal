@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"arma3modmanager/internal/auth"
 	"arma3modmanager/internal/config"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/handlers"
@@ -27,6 +28,8 @@ func main() {
 		log.Fatal("Failed to initialize database:", err)
 	}
 	defer database.Close()
+
+	auth.StartSessionCleanup()
 
 	server.Init()
 
