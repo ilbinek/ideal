@@ -701,7 +701,7 @@ export function Mods() {
       />
 
       <Card>
-        <CardContent className="flex flex-wrap items-center gap-2 p-4">
+        <CardContent className="flex flex-wrap items-center gap-2 p-4 sm:p-5">
           <Button onClick={() => enqueue.mutate("all")} disabled={enqueue.isPending}>
             <Download className="size-4" /> Download all
           </Button>
@@ -748,7 +748,7 @@ export function Mods() {
 
       {snapshot.total > 0 && (
         <Card>
-          <CardContent className="flex flex-col gap-2 p-4">
+          <CardContent className="flex flex-col gap-2 p-4 sm:p-5">
             <div className="flex items-center justify-between text-sm">
               <span className="font-medium">
                 {snapshot.processing ? "Downloading queue" : "Queue finished"}
@@ -766,7 +766,7 @@ export function Mods() {
       )}
 
       <Card>
-        <CardContent className="flex flex-col gap-3 p-4">
+        <CardContent className="flex flex-col gap-3 p-4 sm:p-5">
           <div className="relative max-w-md">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -810,7 +810,7 @@ export function Mods() {
 
       {selectedCount > 0 && (
         <Card>
-          <CardContent className="flex flex-wrap items-center gap-2 p-4">
+          <CardContent className="flex flex-wrap items-center gap-2 p-4 sm:p-5">
             <span className="text-sm font-medium">{selectedCount} selected</span>
             <Button
               size="sm"
