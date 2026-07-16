@@ -65,8 +65,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  // Auth
-  session: () => request<Session>("/api/session"),
+  // Auth — session check must not trigger the global 401→login redirect
+  session: async () => {
+    const res = await fetch("/api/session", {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      throw new ApiError(res.status, "failed to load session");
+    }
+    return (await res.json()) as Session;
+  },
   login: (password: string) =>
     request<{ ok: boolean }>("/api/login", {
       method: "POST",

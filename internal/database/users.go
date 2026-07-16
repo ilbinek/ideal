@@ -180,17 +180,41 @@ func ListUsers() ([]User, error) {
 		if lastLogin.Valid {
 			u.LastLoginAt = lastLogin.Time
 		}
-		ids, err := GetUserServerIDs(u.ID)
-		if err != nil {
-			return nil, err
-		}
-		u.ServerIDs = ids
+		u.ServerIDs = []int{}
 		out = append(out, u)
 	}
-	if out == nil {
-		out = []User{}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	if out == nil {
+		return []User{}, nil
+	}
+
+	// Load server assignments after closing the users cursor — required with
+	// MaxOpenConns(1), which deadlocks on nested queries while rows are open.
+	adminRows, err := db.Query(`SELECT user_id, server_id FROM server_admins ORDER BY user_id, server_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer adminRows.Close()
+
+	byUser := make(map[int][]int, len(out))
+	for adminRows.Next() {
+		var userID, serverID int
+		if err := adminRows.Scan(&userID, &serverID); err != nil {
+			return nil, err
+		}
+		byUser[userID] = append(byUser[userID], serverID)
+	}
+	if err := adminRows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if ids, ok := byUser[out[i].ID]; ok {
+			out[i].ServerIDs = ids
+		}
+	}
+	return out, nil
 }
 
 func UpdateUserPermissions(id int, isFullAdmin, canManageMods, canManageBranches bool, serverIDs []int) error {

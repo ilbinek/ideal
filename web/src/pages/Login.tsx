@@ -37,6 +37,14 @@ export function Login() {
 
   const steamEnabled = session.data?.steamLoginEnabled === true;
 
+  if (session.isLoading || !session.isFetched) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
