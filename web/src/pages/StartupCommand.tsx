@@ -5,6 +5,7 @@ import { ArrowLeft, Check, Copy } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/PageHeader";
 
 export function StartupCommand() {
   const [params] = useSearchParams();
@@ -26,18 +27,17 @@ export function StartupCommand() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-3">
-        <Button asChild variant="ghost" size="icon">
+      <div className="flex items-start gap-3">
+        <Button asChild variant="ghost" size="icon" className="mt-0.5 shrink-0">
           <Link to="/modsets">
             <ArrowLeft className="size-4" />
           </Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-semibold">Startup command</h1>
-          <p className="text-sm text-muted-foreground">
-            Server mod parameter and extracted keys for this modset.
-          </p>
-        </div>
+        <PageHeader
+          className="flex-1"
+          title="Startup command"
+          description="Server mod parameter and extracted keys for this modset."
+        />
       </div>
 
       {!modset && <p className="text-sm text-destructive">No modset selected.</p>}

@@ -60,28 +60,29 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             className={cn(
-              "flex items-start gap-3 rounded-lg border border-border bg-card p-4 shadow-lg",
-              "data-[v=error]:border-destructive/40 data-[v=success]:border-[color-mix(in_oklch,var(--success)_40%,transparent)]",
+              "flex items-start gap-3 rounded-lg border bg-card p-4",
+              t.variant === "error" && "border-destructive/40",
+              t.variant === "success" && "border-success/40",
+              t.variant === "info" && "border-border",
             )}
-            data-v={t.variant}
           >
             {t.variant === "success" && (
-              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-[var(--success)]" />
+              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-success" />
             )}
             {t.variant === "error" && (
               <XCircle className="mt-0.5 size-5 shrink-0 text-destructive" />
             )}
-            <div className="flex-1 min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">{t.title}</p>
               {t.description && (
-                <p className="mt-0.5 text-xs text-muted-foreground break-words">
+                <p className="mt-0.5 break-words text-xs text-muted-foreground">
                   {t.description}
                 </p>
               )}
             </div>
             <button
               onClick={() => remove(t.id)}
-              className="text-muted-foreground hover:text-foreground"
+              className="rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <X className="size-4" />
             </button>

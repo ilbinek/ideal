@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { useDownloads } from "@/hooks/useDownloads";
+import { PageHeader } from "@/components/PageHeader";
 
 type StatusFilter = "all" | "downloaded" | "missing" | "outdated";
 type SortKey = "name" | "workshopId" | "status" | "lastUpdated" | "lastChecked";
@@ -682,24 +683,22 @@ export function Mods() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Mods</h1>
-          <p className="text-sm text-muted-foreground">
-            Download, update and manage Workshop mods.
-          </p>
-        </div>
-        <div className="w-56">
-          <Select value={modsetParam ?? ""} onChange={(e) => setModsetFilter(e.target.value)}>
-            <option value="">All mods</option>
-            {modsets?.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </Select>
-        </div>
-      </div>
+      <PageHeader
+        title="Mods"
+        description="Download, update and manage Workshop mods."
+        actions={
+          <div className="w-56">
+            <Select value={modsetParam ?? ""} onChange={(e) => setModsetFilter(e.target.value)}>
+              <option value="">All mods</option>
+              {modsets?.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+        }
+      />
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-2 p-4">

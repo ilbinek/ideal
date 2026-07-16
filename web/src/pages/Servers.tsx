@@ -11,6 +11,7 @@ import {
 import { api } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { permissionsOf, useSession } from "@/hooks/useSession";
+import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,7 +26,7 @@ import type { ServerStatus } from "@/lib/types";
 function statusVariant(status: ServerStatus) {
   switch (status) {
     case "running":
-      return "default";
+      return "success";
     case "starting":
     case "stopping":
       return "secondary";
@@ -89,29 +90,27 @@ export function Servers() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Servers</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage Arma 3 dedicated server instances.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {perms.canManageBranches && (
-            <Button variant="outline" asChild>
-              <Link to="/branches">Branches</Link>
-            </Button>
-          )}
-          {perms.isFullAdmin && (
-            <Button asChild>
-              <Link to="/servers/new">
-                <Plus className="size-4" />
-                New server
-              </Link>
-            </Button>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Servers"
+        description="Manage Arma 3 dedicated server instances."
+        actions={
+          <>
+            {perms.canManageBranches && (
+              <Button variant="outline" asChild>
+                <Link to="/branches">Branches</Link>
+              </Button>
+            )}
+            {perms.isFullAdmin && (
+              <Button asChild>
+                <Link to="/servers/new">
+                  <Plus className="size-4" />
+                  New server
+                </Link>
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {actionError && (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -121,13 +120,13 @@ export function Servers() {
 
       {servers.isLoading ? (
         <div className="flex justify-center py-12">
-          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+          <Loader2 className="size-6 animate-spin text-primary" />
         </div>
       ) : !servers.data?.length ? (
-        <Card>
+        <Card className="border-dashed">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Server className="size-4" />
+              <Server className="size-4 text-muted-foreground" />
               No servers yet
             </CardTitle>
             <CardDescription>
@@ -146,31 +145,34 @@ export function Servers() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
           {servers.data.map((srv) => {
             const live = statusFor(srv.id);
             const status = srv.status ?? live?.status ?? "stopped";
             const isRunning = status === "running" || status === "starting";
             return (
-              <Card key={srv.id} className="flex flex-col">
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between gap-2">
+              <Card
+                key={srv.id}
+                className="flex flex-col gap-0 sm:flex-row sm:items-center"
+              >
+                <CardHeader className="flex-1 pb-2 sm:pb-4">
+                  <div className="flex flex-wrap items-center gap-2">
                     <CardTitle className="text-base">
                       <Link
                         to={`/servers/${srv.id}`}
-                        className="hover:underline"
+                        className="transition-colors hover:underline"
                       >
                         {srv.name}
                       </Link>
                     </CardTitle>
                     <Badge variant={statusVariant(status)}>{status}</Badge>
                   </div>
-                  <CardDescription>
+                  <CardDescription className="font-mono text-xs">
                     {branchName(srv.branchId)} · :{srv.gamePort}
                     {live?.uptime ? ` · ${live.uptime}s uptime` : ""}
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="mt-auto flex gap-2">
+                <CardContent className="flex gap-2 sm:pt-4">
                   <Button
                     size="sm"
                     variant={isRunning ? "outline" : "default"}

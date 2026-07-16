@@ -39,21 +39,23 @@ export function Login() {
 
   if (session.isLoading || !session.isFetched) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
-        <CardHeader className="items-center text-center">
-          <div className="mb-2 flex size-12 items-center justify-center rounded-xl bg-primary/15">
-            <Package className="size-6 text-primary" />
+        <CardHeader className="items-center space-y-3 text-center">
+          <div className="flex size-12 items-center justify-center rounded-md border border-border bg-secondary">
+            <Package className="size-6 text-foreground" />
           </div>
-          <CardTitle>IDEAL</CardTitle>
-          <CardDescription>Arma 3 Mod Manager</CardDescription>
+          <div>
+            <CardTitle className="text-2xl font-semibold tracking-tight">IDEAL</CardTitle>
+            <CardDescription className="mt-1.5">Arma 3 Mod Manager</CardDescription>
+          </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <form
@@ -72,6 +74,7 @@ export function Login() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter password"
+                className="font-mono"
               />
             </div>
             {login.isError && (
@@ -81,7 +84,7 @@ export function Login() {
                   : "Login failed"}
               </p>
             )}
-            <Button type="submit" disabled={login.isPending || !password}>
+            <Button type="submit" disabled={login.isPending || !password} className="w-full">
               {login.isPending && <Loader2 className="size-4 animate-spin" />}
               Sign in
             </Button>
@@ -104,7 +107,7 @@ export function Login() {
               <Button
                 type="button"
                 variant="outline"
-                className="w-full border-[#1b2838] bg-[#171a21] text-white hover:bg-[#1b2838] hover:text-white"
+                className="w-full"
                 asChild
               >
                 <a href="/api/auth/steam">

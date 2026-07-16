@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
+import { PageHeader } from "@/components/PageHeader";
 import type { Modset } from "@/lib/types";
 
 export function Modsets() {
@@ -62,33 +63,33 @@ export function Modsets() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Modsets</h1>
-          <p className="text-sm text-muted-foreground">
-            Import Arma 3 launcher preset HTML exports.
-          </p>
-        </div>
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".html,text/html"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) upload.mutate(file);
-            e.target.value = "";
-          }}
-        />
-        <Button onClick={() => fileInput.current?.click()} disabled={upload.isPending}>
-          {upload.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Upload className="size-4" />
-          )}
-          Import preset
-        </Button>
-      </div>
+      <PageHeader
+        title="Modsets"
+        description="Import Arma 3 launcher preset HTML exports."
+        actions={
+          <>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".html,text/html"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) upload.mutate(file);
+                e.target.value = "";
+              }}
+            />
+            <Button onClick={() => fileInput.current?.click()} disabled={upload.isPending}>
+              {upload.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Upload className="size-4" />
+              )}
+              Import preset
+            </Button>
+          </>
+        }
+      />
 
       <Card>
         <CardHeader>

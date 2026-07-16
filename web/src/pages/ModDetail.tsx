@@ -138,7 +138,7 @@ export function ModDetail() {
             </Link>
           </Button>
           <div className="flex flex-col gap-2">
-            <h1 className="text-2xl font-semibold">{data.name}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{data.name}</h1>
             <div className="flex flex-wrap items-center gap-2">
               <a
                 href={`https://steamcommunity.com/sharedfiles/filedetails/?id=${data.workshopId}`}

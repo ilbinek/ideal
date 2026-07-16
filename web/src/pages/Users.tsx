@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/PageHeader";
 
 export function UsersPage() {
   const queryClient = useQueryClient();
@@ -50,13 +51,10 @@ export function UsersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Users</h1>
-        <p className="text-sm text-muted-foreground">
-          Steam accounts that have signed in. Grant roles before they can use the
-          app.
-        </p>
-      </div>
+      <PageHeader
+        title="Users"
+        description="Steam accounts that have signed in. Grant roles before they can use the app."
+      />
 
       {error && (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">

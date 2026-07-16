@@ -169,19 +169,33 @@ export function ServerDetail() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-3 py-3 sm:gap-4 sm:px-4">
         <Button variant="ghost" size="sm" asChild>
           <Link to="/servers">
             <ArrowLeft className="size-4" /> Servers
           </Link>
         </Button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold">{srv.name}</h1>
-          <p className="text-sm text-muted-foreground">
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">
+            {srv.name}
+          </h1>
+          <p className="font-mono text-xs text-muted-foreground">
             :{srv.gamePort} / steam :{srv.steamPort} · {srv.slug}
           </p>
         </div>
-        <Badge>{status}</Badge>
+        <Badge
+          variant={
+            status === "running"
+              ? "success"
+              : status === "unknown"
+                ? "destructive"
+                : status === "starting" || status === "stopping"
+                  ? "secondary"
+                  : "outline"
+          }
+        >
+          {status}
+        </Badge>
         <div className="flex gap-2">
           <Button
             size="sm"
@@ -220,16 +234,16 @@ export function ServerDetail() {
         </p>
       )}
 
-      <div className="flex flex-wrap gap-1 border-b border-border pb-1">
+      <div className="flex flex-wrap gap-1 border-b border-border">
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
               tab === t.id
-                ? "bg-secondary text-foreground"
-                : "text-muted-foreground hover:bg-accent"
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
             {t.label}

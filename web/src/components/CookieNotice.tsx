@@ -14,8 +14,8 @@ export function CookieNotice() {
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-card/95 p-4 shadow-lg backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-card p-4">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground">
           This site uses a necessary session cookie to keep you signed in, and a
           short-lived cookie during Steam sign-in. No analytics or marketing

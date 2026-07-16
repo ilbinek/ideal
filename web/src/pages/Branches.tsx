@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/table";
 import { useState } from "react";
 import * as React from "react";
+import { PageHeader } from "@/components/PageHeader";
 
 export function Branches() {
   const queryClient = useQueryClient();
@@ -73,18 +74,15 @@ export function Branches() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Branches</h1>
-          <p className="text-sm text-muted-foreground">
-            Central Arma 3 dedicated server installs (built-in downloader by default;
-            override in Settings). Update re-checks installed files against the CDN.
-          </p>
-        </div>
-        <Button variant="outline" asChild>
-          <Link to="/servers">Back to servers</Link>
-        </Button>
-      </div>
+      <PageHeader
+        title="Branches"
+        description="Central Arma 3 dedicated server installs (built-in downloader by default; override in Settings). Update re-checks installed files against the CDN."
+        actions={
+          <Button variant="outline" asChild>
+            <Link to="/servers">Back to servers</Link>
+          </Button>
+        }
+      />
 
       {(installSnap.installing || !!installSnap.error) && (
         <Card>

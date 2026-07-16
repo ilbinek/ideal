@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { SteamLogin } from "@/components/SteamLogin";
+import { PageHeader } from "@/components/PageHeader";
 
 export function SettingsPage() {
   const toast = useToast();
@@ -77,12 +78,10 @@ export function SettingsPage() {
       }}
       className="flex flex-col gap-6"
     >
-      <div>
-        <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Steam credentials drive downloads; the API key powers update checks.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Steam credentials drive downloads; the API key powers update checks."
+      />
 
       <Card className="max-w-xl">
         <CardHeader>
