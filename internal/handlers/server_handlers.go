@@ -177,6 +177,25 @@ func GetServersHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, servers)
 }
 
+func ReorderServersHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []int `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids required")
+		return
+	}
+	if err := database.ReorderServers(body.IDs); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func filterServersForPrincipal(servers []database.Server, p *auth.Principal) []database.Server {
 	if p == nil {
 		return []database.Server{}

@@ -208,6 +208,11 @@ export const api = {
 
   // Servers
   getServers: () => request<GameServer[]>("/api/servers"),
+  reorderServers: (ids: number[]) =>
+    request<{ ok: boolean }>("/api/servers/reorder", {
+      method: "PUT",
+      body: JSON.stringify({ ids }),
+    }),
   createServer: (body: {
     name: string;
     branchId: number;

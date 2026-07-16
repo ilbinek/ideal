@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  GripVertical,
   Loader2,
   Play,
   Plus,
@@ -9,6 +10,7 @@ import {
   Square,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { permissionsOf, useSession } from "@/hooks/useSession";
 import { PageHeader } from "@/components/PageHeader";
@@ -21,7 +23,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import type { ServerStatus } from "@/lib/types";
+import type { GameServer, ServerStatus } from "@/lib/types";
 
 function statusVariant(status: ServerStatus) {
   switch (status) {
@@ -37,6 +39,17 @@ function statusVariant(status: ServerStatus) {
   }
 }
 
+function reorderList(list: GameServer[], fromId: number, toId: number): GameServer[] {
+  if (fromId === toId) return list;
+  const from = list.findIndex((s) => s.id === fromId);
+  const to = list.findIndex((s) => s.id === toId);
+  if (from < 0 || to < 0) return list;
+  const next = [...list];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
 export function Servers() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -44,9 +57,18 @@ export function Servers() {
   const [actionError, setActionError] = useState("");
   const { data: session } = useSession();
   const perms = permissionsOf(session);
+  const canReorder = perms.isFullAdmin;
 
   const servers = useQuery({ queryKey: ["servers"], queryFn: () => api.getServers() });
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
+
+  const [ordered, setOrdered] = useState<GameServer[]>([]);
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [overId, setOverId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (servers.data) setOrdered(servers.data);
+  }, [servers.data]);
 
   const start = useMutation({
     mutationFn: (id: number) => api.startServer(id),
@@ -85,14 +107,52 @@ export function Servers() {
     },
   });
 
+  const reorder = useMutation({
+    mutationFn: (ids: number[]) => api.reorderServers(ids),
+    onMutate: async (ids) => {
+      setActionError("");
+      await queryClient.cancelQueries({ queryKey: ["servers"] });
+      const previous = queryClient.getQueryData<GameServer[]>(["servers"]);
+      const byId = new Map((previous ?? ordered).map((s) => [s.id, s]));
+      const next = ids
+        .map((id, i) => {
+          const s = byId.get(id);
+          return s ? { ...s, sortOrder: i } : null;
+        })
+        .filter((s): s is GameServer => s != null);
+      queryClient.setQueryData(["servers"], next);
+      setOrdered(next);
+      return { previous };
+    },
+    onError: (err, _ids, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(["servers"], ctx.previous);
+        setOrdered(ctx.previous);
+      }
+      setActionError(err instanceof Error ? err.message : "Reorder failed");
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+  });
+
   const branchName = (id: number) =>
     branches.data?.find((b) => b.id === id)?.name ?? `Branch #${id}`;
+
+  const commitReorder = (next: GameServer[]) => {
+    setOrdered(next);
+    reorder.mutate(next.map((s) => s.id));
+  };
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Servers"
-        description="Manage Arma 3 dedicated server instances."
+        description={
+          canReorder
+            ? "Manage Arma 3 dedicated server instances. Drag the handle to reorder."
+            : "Manage Arma 3 dedicated server instances."
+        }
         actions={
           <>
             {perms.canManageBranches && (
@@ -120,9 +180,9 @@ export function Servers() {
 
       {servers.isLoading ? (
         <div className="flex justify-center py-12">
-          <Loader2 className="size-6 animate-spin text-primary" />
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
         </div>
-      ) : !servers.data?.length ? (
+      ) : !ordered.length ? (
         <Card className="border-dashed">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -146,15 +206,65 @@ export function Servers() {
         </Card>
       ) : (
         <div className="flex flex-col gap-2">
-          {servers.data.map((srv) => {
+          {ordered.map((srv) => {
             const live = statusFor(srv.id);
             const status = srv.status ?? live?.status ?? "stopped";
             const isRunning = status === "running" || status === "starting";
             return (
               <Card
                 key={srv.id}
-                className="flex flex-col gap-0 sm:flex-row sm:items-center"
+                className={cn(
+                  "flex flex-col gap-0 sm:flex-row sm:items-center",
+                  dragId === srv.id && "opacity-60",
+                  overId === srv.id && dragId !== srv.id && "border-foreground/40",
+                )}
+                onDragOver={
+                  canReorder
+                    ? (e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        if (overId !== srv.id) setOverId(srv.id);
+                      }
+                    : undefined
+                }
+                onDragLeave={
+                  canReorder
+                    ? () => {
+                        if (overId === srv.id) setOverId(null);
+                      }
+                    : undefined
+                }
+                onDrop={
+                  canReorder
+                    ? (e) => {
+                        e.preventDefault();
+                        const from = Number(e.dataTransfer.getData("text/plain"));
+                        setDragId(null);
+                        setOverId(null);
+                        if (!Number.isFinite(from) || from === srv.id) return;
+                        commitReorder(reorderList(ordered, from, srv.id));
+                      }
+                    : undefined
+                }
               >
+                {canReorder && (
+                  <div
+                    className="flex cursor-grab items-center px-2 pt-4 text-muted-foreground active:cursor-grabbing sm:pt-0 sm:pl-3"
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", String(srv.id));
+                      setDragId(srv.id);
+                    }}
+                    onDragEnd={() => {
+                      setDragId(null);
+                      setOverId(null);
+                    }}
+                    title="Drag to reorder"
+                  >
+                    <GripVertical className="size-4" />
+                  </div>
+                )}
                 <CardHeader className="flex-1 pb-2 sm:pb-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle className="text-base">

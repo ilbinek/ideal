@@ -159,6 +159,7 @@ export interface GameServer {
   headlessCount: number;
   missionHttpServe: boolean;
   missionHttpPath: string;
+  sortOrder: number;
   status: ServerStatus;
   pid: number;
   activeRpt: string;

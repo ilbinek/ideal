@@ -76,6 +76,7 @@ func APIHandler() http.Handler {
 	// Servers
 	mux.HandleFunc("GET /api/servers", apiAuth(GetServersHandler))
 	mux.HandleFunc("POST /api/servers", apiFullAdmin(CreateServerHandler))
+	mux.HandleFunc("PUT /api/servers/reorder", apiFullAdmin(ReorderServersHandler))
 	mux.HandleFunc("GET /api/servers/stream", apiAuth(ServersStreamHandler))
 	mux.HandleFunc("GET /api/servers/{id}", apiServerAdmin(GetServerHandler))
 	mux.HandleFunc("PUT /api/servers/{id}", apiServerAdmin(UpdateServerHandler))

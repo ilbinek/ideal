@@ -48,6 +48,7 @@ type Server struct {
 	HeadlessCount     int       `json:"headlessCount"`
 	MissionHttpServe  bool      `json:"missionHttpServe"`
 	MissionHttpPath   string    `json:"missionHttpPath"`
+	SortOrder         int       `json:"sortOrder"`
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
 	ActiveRPT         string    `json:"activeRpt"`
@@ -96,6 +97,7 @@ func migrateServers() error {
 			server_binary TEXT DEFAULT '',
 			local_mods_root TEXT DEFAULT '',
 			extra_launch_params TEXT DEFAULT '',
+			sort_order INTEGER DEFAULT 0,
 			status TEXT DEFAULT 'stopped',
 			pid INTEGER DEFAULT 0,
 			active_rpt TEXT DEFAULT '',
@@ -160,6 +162,7 @@ func migrateServerColumns() error {
 		"ALTER TABLE servers ADD COLUMN headless_count INTEGER DEFAULT 0",
 		"ALTER TABLE servers ADD COLUMN enabled_cdlcs TEXT DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN mission_http_serve BOOLEAN DEFAULT 0",
+		"ALTER TABLE servers ADD COLUMN sort_order INTEGER DEFAULT 0",
 		"ALTER TABLE server_mods ADD COLUMN enabled BOOLEAN DEFAULT 1",
 		"ALTER TABLE server_mods ADD COLUMN source TEXT DEFAULT ''",
 		"ALTER TABLE arma_branches ADD COLUMN build_id TEXT DEFAULT ''",
@@ -172,7 +175,52 @@ func migrateServerColumns() error {
 			return err
 		}
 	}
-	return nil
+	return backfillServerSortOrder()
+}
+
+// backfillServerSortOrder assigns sequential sort_order values when every row is still 0
+// (fresh column). Preserves existing custom orders after the first migration.
+func backfillServerSortOrder() error {
+	var unset, total int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM servers WHERE COALESCE(sort_order, 0) = 0`).Scan(&unset); err != nil {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM servers`).Scan(&total); err != nil {
+		return err
+	}
+	if total == 0 || unset != total {
+		return nil
+	}
+	rows, err := db.Query(`SELECT id FROM servers ORDER BY name COLLATE NOCASE, id`)
+	if err != nil {
+		return err
+	}
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE servers SET sort_order = ? WHERE id = ?`, i, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // MissionHttpPath returns the public path suffix for Arma mission HTTP download.
@@ -478,10 +526,11 @@ const serverSelectCols = `
 		COALESCE(enabled_cdlcs, ''),
 		COALESCE(headless_count, 0),
 		COALESCE(mission_http_serve, 0),
+		COALESCE(sort_order, 0),
 		status, pid, COALESCE(active_rpt, ''), created_at, updated_at`
 
 func GetServers() ([]Server, error) {
-	rows, err := db.Query(`SELECT ` + serverSelectCols + ` FROM servers ORDER BY name`)
+	rows, err := db.Query(`SELECT ` + serverSelectCols + ` FROM servers ORDER BY sort_order, name COLLATE NOCASE, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +587,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
 			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &enabledCdlcs, &s.HeadlessCount,
-			&missionHttpServe,
+			&missionHttpServe, &s.SortOrder,
 			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -559,16 +608,58 @@ func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, stea
 	if profileName == "" {
 		profileName = "Server"
 	}
+	var nextOrder int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(sort_order), -1) + 1 FROM servers`).Scan(&nextOrder); err != nil {
+		return 0, err
+	}
 	result, err := db.Exec(`
-		INSERT INTO servers (name, slug, branch_id, modset_id, game_port, steam_port, profile_name, server_binary)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO servers (name, slug, branch_id, modset_id, game_port, steam_port, profile_name, server_binary, sort_order)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		name, slug, branchID, modsetID, gamePort, steamPort, profileName,
-		strings.TrimSpace(serverBinary),
+		strings.TrimSpace(serverBinary), nextOrder,
 	)
 	if err != nil {
 		return 0, err
 	}
 	return result.LastInsertId()
+}
+
+// ReorderServers sets sort_order from the given id list (index = order).
+// ids must list every existing server exactly once.
+func ReorderServers(ids []int) error {
+	existing, err := GetServers()
+	if err != nil {
+		return err
+	}
+	if len(ids) != len(existing) {
+		return fmt.Errorf("expected %d server ids, got %d", len(existing), len(ids))
+	}
+	known := make(map[int]struct{}, len(existing))
+	for _, s := range existing {
+		known[s.ID] = struct{}{}
+	}
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := known[id]; !ok {
+			return fmt.Errorf("unknown server id %d", id)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("duplicate server id %d", id)
+		}
+		seen[id] = struct{}{}
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE servers SET sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, i, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary, extraLaunchParams string, enabledCdlcs []string) error {
