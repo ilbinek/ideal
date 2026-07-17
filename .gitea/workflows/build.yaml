@@ -39,9 +39,10 @@ jobs:
             artifact_name: ideal-windows-arm64.exe
             release_name: windows-arm64
             exe_name: ideal.exe
-            cc: aarch64-w64-mingw32-gcc
+            # Absolute path: Gitea runners often ignore GITHUB_PATH updates.
+            cc: /opt/llvm-mingw/bin/aarch64-w64-mingw32-gcc
             apt: ''
-            llvm_mingw: true
+            llvm_mingw: 'true'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -66,8 +67,10 @@ jobs:
           if [ "${{ matrix.llvm_mingw }}" = "true" ]; then
             curl -fsSL -o /tmp/llvm-mingw.tar.xz \
               https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
-            sudo tar -xJf /tmp/llvm-mingw.tar.xz -C /opt
-            echo "/opt/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+            sudo rm -rf /opt/llvm-mingw
+            sudo mkdir -p /opt/llvm-mingw
+            sudo tar -xJf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
+            "${{ matrix.cc }}" --version
           fi
 
       - name: Build frontend (embedded SPA)
@@ -78,10 +81,10 @@ jobs:
 
       - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
         run: |
+          command -v "${{ matrix.cc }}" || { echo "C compiler not found: ${{ matrix.cc }}"; exit 1; }
           CGO_ENABLED=1 CC="${{ matrix.cc }}" \
             GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
             go build -v -o "${{ matrix.artifact_name }}" .
-
       - name: Bundle Artifacts
         run: |
           mkdir -p "release-${{ matrix.release_name }}"
