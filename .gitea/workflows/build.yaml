@@ -9,6 +9,39 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact_name: ideal-linux-amd64
+            release_name: linux-amd64
+            exe_name: ideal
+            cc: gcc
+            apt: gcc
+          - goos: linux
+            goarch: arm64
+            artifact_name: ideal-linux-arm64
+            release_name: linux-arm64
+            exe_name: ideal
+            cc: aarch64-linux-gnu-gcc
+            apt: gcc-aarch64-linux-gnu
+          - goos: windows
+            goarch: amd64
+            artifact_name: ideal-windows-amd64.exe
+            release_name: windows-amd64
+            exe_name: ideal.exe
+            cc: x86_64-w64-mingw32-gcc
+            apt: gcc-mingw-w64-x86-64
+          - goos: windows
+            goarch: arm64
+            artifact_name: ideal-windows-arm64.exe
+            release_name: windows-arm64
+            exe_name: ideal.exe
+            cc: aarch64-w64-mingw32-gcc
+            apt: ''
+            llvm_mingw: true
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -24,16 +57,18 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install C cross-compilers
+      - name: Install C toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc \
-            gcc-aarch64-linux-gnu
-          curl -fsSL -o /tmp/llvm-mingw.tar.xz \
-            https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
-          sudo tar -xJf /tmp/llvm-mingw.tar.xz -C /opt
-          echo "/opt/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+          if [ -n "${{ matrix.apt }}" ]; then
+            sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+          fi
+          if [ "${{ matrix.llvm_mingw }}" = "true" ]; then
+            curl -fsSL -o /tmp/llvm-mingw.tar.xz \
+              https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
+            sudo tar -xJf /tmp/llvm-mingw.tar.xz -C /opt
+            echo "/opt/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Build frontend (embedded SPA)
         working-directory: web
@@ -41,46 +76,22 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build and bundle all platforms
+      - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
         run: |
-          build_one() {
-            local goos=$1 goarch=$2 binary=$3 release=$4 exe_name=$5 cc=$6
-            echo "Building ${goos}/${goarch} with CC=${cc}"
-            CGO_ENABLED=1 CC="$cc" GOOS="$goos" GOARCH="$goarch" go build -v -o "$binary" .
-            mkdir -p "release-$release"
-            cp "$binary" "release-$release/$exe_name"
-            cp config.json "release-$release/"
-            cp README.md "release-$release/"
-          }
-          build_one linux   amd64 ideal-linux-amd64         linux-amd64   ideal     gcc
-          build_one linux   arm64 ideal-linux-arm64         linux-arm64   ideal     aarch64-linux-gnu-gcc
-          build_one windows amd64 ideal-windows-amd64.exe   windows-amd64 ideal.exe x86_64-w64-mingw32-gcc
-          build_one windows arm64 ideal-windows-arm64.exe   windows-arm64 ideal.exe aarch64-w64-mingw32-gcc
+          CGO_ENABLED=1 CC="${{ matrix.cc }}" \
+            GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+            go build -v -o "${{ matrix.artifact_name }}" .
 
-      - name: Upload linux-amd64
+      - name: Bundle Artifacts
+        run: |
+          mkdir -p "release-${{ matrix.release_name }}"
+          cp "${{ matrix.artifact_name }}" "release-${{ matrix.release_name }}/${{ matrix.exe_name }}"
+          cp config.json "release-${{ matrix.release_name }}/"
+          cp README.md "release-${{ matrix.release_name }}/"
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: linux-amd64
-          path: release-linux-amd64/
-          if-no-files-found: error
-
-      - name: Upload linux-arm64
-        uses: actions/upload-artifact@v3
-        with:
-          name: linux-arm64
-          path: release-linux-arm64/
-          if-no-files-found: error
-
-      - name: Upload windows-amd64
-        uses: actions/upload-artifact@v3
-        with:
-          name: windows-amd64
-          path: release-windows-amd64/
-          if-no-files-found: error
-
-      - name: Upload windows-arm64
-        uses: actions/upload-artifact@v3
-        with:
-          name: windows-arm64
-          path: release-windows-arm64/
+          name: ${{ matrix.release_name }}
+          path: release-${{ matrix.release_name }}/
           if-no-files-found: error
