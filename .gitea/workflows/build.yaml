@@ -24,6 +24,17 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install C cross-compilers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc \
+            gcc-aarch64-linux-gnu
+          curl -fsSL -o /tmp/llvm-mingw.tar.xz \
+            https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
+          sudo tar -xJf /tmp/llvm-mingw.tar.xz -C /opt
+          echo "/opt/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
+
       - name: Build frontend (embedded SPA)
         working-directory: web
         run: |
@@ -33,17 +44,18 @@ jobs:
       - name: Build and bundle all platforms
         run: |
           build_one() {
-            local goos=$1 goarch=$2 binary=$3 release=$4 exe_name=$5
-            GOOS="$goos" GOARCH="$goarch" go build -v -o "$binary" .
+            local goos=$1 goarch=$2 binary=$3 release=$4 exe_name=$5 cc=$6
+            echo "Building ${goos}/${goarch} with CC=${cc}"
+            CGO_ENABLED=1 CC="$cc" GOOS="$goos" GOARCH="$goarch" go build -v -o "$binary" .
             mkdir -p "release-$release"
             cp "$binary" "release-$release/$exe_name"
             cp config.json "release-$release/"
             cp README.md "release-$release/"
           }
-          build_one linux   amd64 ideal-linux-amd64         linux-amd64   ideal
-          build_one linux   arm64 ideal-linux-arm64         linux-arm64   ideal
-          build_one windows amd64 ideal-windows-amd64.exe   windows-amd64 ideal.exe
-          build_one windows arm64 ideal-windows-arm64.exe   windows-arm64 ideal.exe
+          build_one linux   amd64 ideal-linux-amd64         linux-amd64   ideal     gcc
+          build_one linux   arm64 ideal-linux-arm64         linux-arm64   ideal     aarch64-linux-gnu-gcc
+          build_one windows amd64 ideal-windows-amd64.exe   windows-amd64 ideal.exe x86_64-w64-mingw32-gcc
+          build_one windows arm64 ideal-windows-arm64.exe   windows-arm64 ideal.exe aarch64-w64-mingw32-gcc
 
       - name: Upload linux-amd64
         uses: actions/upload-artifact@v3
