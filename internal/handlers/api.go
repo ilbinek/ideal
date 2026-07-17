@@ -17,6 +17,7 @@ import (
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/parser"
 	"arma3modmanager/internal/queue"
+	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/updatecheck"
 	"arma3modmanager/internal/utils"
 	"arma3modmanager/internal/workshop"
@@ -104,6 +105,9 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		"maxConcurrentDownloads":     4,
 		"updateCheckIntervalMinutes": 0,
 		"discordWebhookUrl":          "",
+		"emulatorMode":               "auto",
+		"box64Path":                  "",
+		"fexPath":                    "",
 	}
 	if config != nil {
 		resp["username"] = config.Username
@@ -119,6 +123,9 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["updateCheckIntervalMinutes"] = config.UpdateCheckIntervalMinutes
 		resp["discordWebhookUrl"] = config.DiscordWebhookURL
+		resp["emulatorMode"] = database.NormalizeEmulatorMode(config.EmulatorMode)
+		resp["box64Path"] = config.Box64Path
+		resp["fexPath"] = config.FexPath
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -134,6 +141,9 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 		MaxConcurrentDownloads     int    `json:"maxConcurrentDownloads"`
 		UpdateCheckIntervalMinutes int    `json:"updateCheckIntervalMinutes"`
 		DiscordWebhookURL          string `json:"discordWebhookUrl"`
+		EmulatorMode               string `json:"emulatorMode"`
+		Box64Path                  string `json:"box64Path"`
+		FexPath                    string `json:"fexPath"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -159,6 +169,7 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 	if err := database.SaveConfig(
 		body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath,
 		body.MaxConcurrentDownloads, body.UpdateCheckIntervalMinutes, body.DiscordWebhookURL,
+		body.EmulatorMode, body.Box64Path, body.FexPath,
 	); err != nil {
 		log.Printf("Error saving config: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to save settings")
@@ -166,6 +177,26 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	updatecheck.Default.Reload()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// SystemCompatHandler reports host arch and x86_64 emulator readiness (ARM64 Linux).
+func SystemCompatHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, server.ProbeEmulatorStatus())
+}
+
+// InstallBox64Handler downloads a prebuilt Box64 into Ideal's data directory (linux/arm64).
+func InstallBox64Handler(w http.ResponseWriter, r *http.Request) {
+	path, version, err := server.InstallManagedBox64(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"path":    path,
+		"version": version,
+		"compat":  server.ProbeEmulatorStatus(),
+	})
 }
 
 // --- Modsets ---

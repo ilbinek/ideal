@@ -15,6 +15,9 @@ import (
 func startProcess(binary string, args []string, workDir string, capture io.Writer) (*managedProc, error) {
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = workDir
+	if extra := EmulatorProcessEnv(); len(extra) > 0 {
+		cmd.Env = append(os.Environ(), extra...)
+	}
 	out := io.Writer(os.Stdout)
 	if capture != nil {
 		// Capture first so a slow/blocked Ideal stdout cannot delay or drop

@@ -4,6 +4,7 @@ import type {
   CdlcCatalog,
   Downloader,
   DownloadScope,
+  EmulatorMode,
   GameServer,
   HeadlessClientsResponse,
   LaunchArgs,
@@ -21,6 +22,7 @@ import type {
   Settings,
   StartupCommand,
   SteamLoginState,
+  SystemCompat,
 } from "./types";
 
 export class ApiError extends Error {
@@ -112,11 +114,20 @@ export const api = {
     maxConcurrentDownloads: number;
     updateCheckIntervalMinutes: number;
     discordWebhookUrl: string;
+    emulatorMode: EmulatorMode;
+    box64Path: string;
+    fexPath: string;
   }) =>
     request<{ ok: boolean }>("/api/settings", {
       method: "POST",
       body: JSON.stringify(s),
     }),
+  getSystemCompat: () => request<SystemCompat>("/api/system/compat"),
+  installBox64: () =>
+    request<{ ok: boolean; path: string; version: string; compat: SystemCompat }>(
+      "/api/system/compat/box64/install",
+      { method: "POST" },
+    ),
 
   // Steam login (built-in gosteam downloader)
   steamStatus: () => request<SteamLoginState>("/api/steam/status"),

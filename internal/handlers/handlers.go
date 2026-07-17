@@ -32,6 +32,8 @@ func APIHandler() http.Handler {
 	// Settings (full admin)
 	mux.HandleFunc("GET /api/settings", apiFullAdmin(GetSettingsHandler))
 	mux.HandleFunc("POST /api/settings", apiFullAdmin(SaveSettingsAPIHandler))
+	mux.HandleFunc("GET /api/system/compat", apiFullAdmin(SystemCompatHandler))
+	mux.HandleFunc("POST /api/system/compat/box64/install", apiFullAdmin(InstallBox64Handler))
 
 	// Steam login (built-in gosteam downloader) — full admin
 	mux.HandleFunc("GET /api/steam/status", apiFullAdmin(SteamStatusHandler))

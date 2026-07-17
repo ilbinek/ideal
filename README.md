@@ -94,6 +94,20 @@ For DepotDownloader / SteamCMD mod downloads, Steam username and password are st
 
 A Steam Web API key (Settings) is used for update checks.
 
+### ARM64 Linux (experimental)
+
+Ideal itself builds for `linux/arm64`, and gosteam can download the **x86_64** Linux dedicated server files on an ARM host. Bohemia does **not** ship a native ARM Arma 3 server.
+
+To *run* a server on ARM64 Linux you need a userspace emulator:
+
+1. In **Settings → ARM64 / x86_64 emulator**, click **Download Box64** — Ideal fetches a prebuilt generic ARM64 binary into `tools/box64/` under the data directory (no sudo, Ideal-only)
+2. Or install Box64 / FEX system-wide and point Settings at it
+3. Prefer the **built-in gosteam** downloader (avoids 32-bit SteamCMD)
+4. Emulator mode **Auto** wraps `arma3server_x64` launches; readiness is shown in Settings
+5. Optionally validate with `scripts/arm64-spike/run-spike.sh`
+
+This is **best-effort / unsupported**. Performance is often poor (Arma is single-thread sensitive). BattlEye/SteamAPI under emulation may fail. Do not expect Pi-class hardware to host serious missions.
+
 ---
 
 ## Installation (release)

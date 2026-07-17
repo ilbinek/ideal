@@ -25,6 +25,9 @@ type Config struct {
 	MaxConcurrentDownloads     int    `json:"maxConcurrentDownloads"`     // gosteam: mods downloaded at once
 	UpdateCheckIntervalMinutes int    `json:"updateCheckIntervalMinutes"` // 0 = off
 	DiscordWebhookURL          string `json:"discordWebhookUrl"`
+	EmulatorMode               string `json:"emulatorMode"` // auto | box64 | fex | none (ARM64 Linux)
+	Box64Path                  string `json:"box64Path"`    // optional; blank = PATH
+	FexPath                    string `json:"fexPath"`      // optional; blank = PATH (FEXInterpreter)
 }
 
 type Modset struct {
@@ -116,6 +119,9 @@ func migrate() error {
 		"ALTER TABLE config ADD COLUMN max_concurrent_downloads INTEGER DEFAULT 4",
 		"ALTER TABLE config ADD COLUMN update_check_interval_minutes INTEGER DEFAULT 0",
 		"ALTER TABLE config ADD COLUMN discord_webhook_url TEXT DEFAULT ''",
+		"ALTER TABLE config ADD COLUMN emulator_mode TEXT DEFAULT 'auto'",
+		"ALTER TABLE config ADD COLUMN box64_path TEXT DEFAULT ''",
+		"ALTER TABLE config ADD COLUMN fex_path TEXT DEFAULT ''",
 		"ALTER TABLE mods ADD COLUMN last_notified_updated INTEGER DEFAULT 0",
 	}
 	for _, stmt := range alters {
@@ -137,6 +143,9 @@ func Close() error {
 }
 
 func GetConfig() (*Config, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
 	config := &Config{}
 	err := db.QueryRow(`
 		SELECT id, username, password, COALESCE(api_key, ''),
@@ -145,12 +154,15 @@ func GetConfig() (*Config, error) {
 		       COALESCE(depot_downloader_path, ''),
 		       COALESCE(max_concurrent_downloads, 4),
 		       COALESCE(update_check_interval_minutes, 0),
-		       COALESCE(discord_webhook_url, '')
+		       COALESCE(discord_webhook_url, ''),
+		       COALESCE(emulator_mode, 'auto'),
+		       COALESCE(box64_path, ''),
+		       COALESCE(fex_path, '')
 		FROM config LIMIT 1`).
 		Scan(&config.ID, &config.Username, &config.Password, &config.ApiKey,
 			&config.Downloader, &config.SteamCmdPath, &config.DepotDownloaderPath,
 			&config.MaxConcurrentDownloads, &config.UpdateCheckIntervalMinutes,
-			&config.DiscordWebhookURL)
+			&config.DiscordWebhookURL, &config.EmulatorMode, &config.Box64Path, &config.FexPath)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -162,7 +174,16 @@ var ValidUpdateCheckIntervals = map[int]bool{
 	0: true, 15: true, 30: true, 60: true, 360: true, 720: true, 1440: true,
 }
 
-func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string, maxConcurrentDownloads, updateCheckIntervalMinutes int, discordWebhookURL string) error {
+func NormalizeEmulatorMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "box64", "fex", "none":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return "auto"
+	}
+}
+
+func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string, maxConcurrentDownloads, updateCheckIntervalMinutes int, discordWebhookURL, emulatorMode, box64Path, fexPath string) error {
 	config, err := GetConfig()
 	if err != nil {
 		return err
@@ -174,22 +195,26 @@ func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownl
 	if !ValidUpdateCheckIntervals[updateCheckIntervalMinutes] {
 		updateCheckIntervalMinutes = 0
 	}
+	emulatorMode = NormalizeEmulatorMode(emulatorMode)
 
 	if config == nil {
 		_, err = db.Exec(
 			`INSERT INTO config (username, password, api_key, downloader, steam_cmd_path, depot_downloader_path,
-			 max_concurrent_downloads, update_check_interval_minutes, discord_webhook_url)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 max_concurrent_downloads, update_check_interval_minutes, discord_webhook_url,
+			 emulator_mode, box64_path, fex_path)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
 			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL,
+			emulatorMode, box64Path, fexPath,
 		)
 	} else {
 		_, err = db.Exec(
 			`UPDATE config SET username = ?, password = ?, api_key = ?, downloader = ?, steam_cmd_path = ?,
 			 depot_downloader_path = ?, max_concurrent_downloads = ?, update_check_interval_minutes = ?,
-			 discord_webhook_url = ? WHERE id = ?`,
+			 discord_webhook_url = ?, emulator_mode = ?, box64_path = ?, fex_path = ? WHERE id = ?`,
 			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
-			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL, config.ID,
+			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL,
+			emulatorMode, box64Path, fexPath, config.ID,
 		)
 	}
 	return err

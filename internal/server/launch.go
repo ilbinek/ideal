@@ -65,14 +65,18 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 	}
 
 	cmdParts := append([]string{"./" + filepath.ToSlash(binaryName)}, formatCommandArgs(args)...)
-	return &LaunchArgs{
+	la := &LaunchArgs{
 		Command:        strings.Join(cmdParts, " "),
 		ModParam:       modParam,
 		ServerModParam: serverModParam,
 		Binary:         binaryPath,
 		Args:           args,
 		WorkingDir:     instanceDir,
-	}, nil
+	}
+	if err := ApplyEmulatorWrap(la); err != nil {
+		return nil, err
+	}
+	return la, nil
 }
 
 // BuildHeadlessLaunchArgs constructs launch arguments for one headless client slot.
@@ -124,13 +128,17 @@ func BuildHeadlessLaunchArgs(serverID, slot int) (*LaunchArgs, error) {
 	}
 
 	cmdParts := append([]string{"./" + filepath.ToSlash(binaryName)}, formatCommandArgs(args)...)
-	return &LaunchArgs{
+	la := &LaunchArgs{
 		Command:    strings.Join(cmdParts, " "),
 		ModParam:   modParam,
 		Binary:     binaryPath,
 		Args:       args,
 		WorkingDir: instanceDir,
-	}, nil
+	}
+	if err := ApplyEmulatorWrap(la); err != nil {
+		return nil, err
+	}
+	return la, nil
 }
 
 var serverCfgPasswordRe = regexp.MustCompile(`(?im)^\s*password\s*=\s*"([^"]*)"\s*;`)

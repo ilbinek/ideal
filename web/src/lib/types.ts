@@ -17,6 +17,8 @@ export interface Modset {
 
 export type Downloader = "gosteam" | "depotdownloader" | "steamcmd";
 
+export type EmulatorMode = "auto" | "box64" | "fex" | "none";
+
 export interface Settings {
   username: string;
   apiKey: string;
@@ -27,6 +29,26 @@ export interface Settings {
   maxConcurrentDownloads: number;
   updateCheckIntervalMinutes: number;
   discordWebhookUrl: string;
+  emulatorMode: EmulatorMode;
+  box64Path: string;
+  fexPath: string;
+}
+
+export interface SystemCompat {
+  goos: string;
+  goarch: string;
+  needsEmulator: boolean;
+  mode: EmulatorMode;
+  resolved: string;
+  path: string;
+  version: string;
+  ready: boolean;
+  message: string;
+  installHint: string;
+  experimental: boolean;
+  canInstallBox64: boolean;
+  managedBox64Path: string;
+  box64Managed: boolean;
 }
 
 export type SteamLoginPhase =

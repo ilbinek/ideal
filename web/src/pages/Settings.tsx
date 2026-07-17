@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { Downloader } from "@/lib/types";
+import type { Downloader, EmulatorMode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -22,6 +22,10 @@ export function SettingsPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { data } = useQuery({ queryKey: ["settings"], queryFn: () => api.getSettings() });
+  const { data: compat } = useQuery({
+    queryKey: ["system-compat"],
+    queryFn: () => api.getSystemCompat(),
+  });
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -32,6 +36,9 @@ export function SettingsPage() {
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(4);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(0);
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
+  const [emulatorMode, setEmulatorMode] = useState<EmulatorMode>("auto");
+  const [box64Path, setBox64Path] = useState("");
+  const [fexPath, setFexPath] = useState("");
 
   useEffect(() => {
     if (data) {
@@ -43,6 +50,9 @@ export function SettingsPage() {
       setMaxConcurrentDownloads(data.maxConcurrentDownloads || 4);
       setUpdateCheckIntervalMinutes(data.updateCheckIntervalMinutes || 0);
       setDiscordWebhookUrl(data.discordWebhookUrl || "");
+      setEmulatorMode(data.emulatorMode || "auto");
+      setBox64Path(data.box64Path || "");
+      setFexPath(data.fexPath || "");
     }
   }, [data]);
 
@@ -58,17 +68,33 @@ export function SettingsPage() {
         maxConcurrentDownloads,
         updateCheckIntervalMinutes,
         discordWebhookUrl,
+        emulatorMode,
+        box64Path,
+        fexPath,
       }),
     onSuccess: () => {
       toast.success("Settings saved");
       setPassword("");
       queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["system-compat"] });
     },
     onError: (e) =>
       toast.error("Failed to save", e instanceof ApiError ? e.message : undefined),
   });
 
+  const installBox64 = useMutation({
+    mutationFn: () => api.installBox64(),
+    onSuccess: (res) => {
+      toast.success("Box64 installed", res.version || res.path);
+      queryClient.setQueryData(["system-compat"], res.compat);
+      queryClient.invalidateQueries({ queryKey: ["system-compat"] });
+    },
+    onError: (e) =>
+      toast.error("Box64 install failed", e instanceof ApiError ? e.message : undefined),
+  });
+
   const isGoSteam = downloader === "gosteam";
+  const showArmCard = Boolean(compat?.needsEmulator || compat?.goarch === "arm64");
 
   return (
     <form
@@ -161,6 +187,87 @@ export function SettingsPage() {
       </Card>
 
       {isGoSteam && <SteamLogin defaultUsername={username} />}
+
+      {showArmCard && (
+        <Card className="max-w-xl">
+          <CardHeader>
+            <CardTitle className="text-base">ARM64 / x86_64 emulator</CardTitle>
+            <CardDescription>
+              Arma 3 dedicated server binaries are x86_64 only. On ARM64 Linux, Ideal
+              wraps launches with Box64 (or FEX). This is experimental and unsupported.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {compat && (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+                <p>
+                  Host: {compat.goos}/{compat.goarch}
+                  {compat.resolved ? ` · emulator: ${compat.resolved}` : ""}
+                  {compat.version ? ` (${compat.version})` : ""}
+                  {compat.box64Managed ? " · Ideal-managed" : ""}
+                </p>
+                <p className={compat.ready ? "text-muted-foreground" : "text-destructive"}>
+                  {compat.message}
+                </p>
+                {!compat.ready && compat.installHint && (
+                  <p className="mt-2 text-xs text-muted-foreground">{compat.installHint}</p>
+                )}
+              </div>
+            )}
+            {compat?.canInstallBox64 && (
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={installBox64.isPending}
+                  onClick={() => installBox64.mutate()}
+                >
+                  {installBox64.isPending && <Loader2 className="size-4 animate-spin" />}
+                  {compat.box64Managed ? "Re-download Box64" : "Download Box64"}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Fetches a prebuilt generic ARM64 Box64 (~10&nbsp;MB) into{" "}
+                  <code className="text-xs">{compat.managedBox64Path || "…/tools/box64/box64"}</code>
+                  . No sudo / system packages. Ideal uses it only to run Arma servers.
+                </p>
+              </div>
+            )}
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="emulatorMode">Emulator mode</Label>
+              <Select
+                id="emulatorMode"
+                value={emulatorMode}
+                onChange={(e) => setEmulatorMode(e.target.value as EmulatorMode)}
+              >
+                <option value="auto">Auto (Box64, then FEX)</option>
+                <option value="box64">Box64 only</option>
+                <option value="fex">FEX only</option>
+                <option value="none">Disabled</option>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="box64Path">Box64 path</Label>
+              <Input
+                id="box64Path"
+                value={box64Path}
+                onChange={(e) => setBox64Path(e.target.value)}
+                placeholder="blank = box64 on PATH"
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="fexPath">FEXInterpreter path</Label>
+              <Input
+                id="fexPath"
+                value={fexPath}
+                onChange={(e) => setFexPath(e.target.value)}
+                placeholder="blank = FEXInterpreter on PATH"
+                autoComplete="off"
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="max-w-xl">
         <CardHeader>
