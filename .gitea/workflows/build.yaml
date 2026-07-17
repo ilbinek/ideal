@@ -58,28 +58,22 @@ jobs:
       - name: Bundle Artifacts (Linux)
         if: matrix.goos == 'linux'
         run: |
-          mkdir release-${{ matrix.goarch }}
-          cp ${{ matrix.artifact_name }} release-${{ matrix.goarch }}/ideal
-          cp config.json release-${{ matrix.goarch }}/
-          cp README.md release-${{ matrix.goarch }}/
-          cd release-${{ matrix.goarch }}
-          zip -r ../release-${{ matrix.release_name }}.zip .
-          cd ..
+          mkdir release-${{ matrix.release_name }}
+          cp ${{ matrix.artifact_name }} release-${{ matrix.release_name }}/ideal
+          cp config.json release-${{ matrix.release_name }}/
+          cp README.md release-${{ matrix.release_name }}/
 
       - name: Bundle Artifacts (Windows)
         if: matrix.goos == 'windows'
         run: |
-          mkdir release-${{ matrix.goarch }}
-          cp ${{ matrix.artifact_name }} release-${{ matrix.goarch }}/ideal.exe
-          cp config.json release-${{ matrix.goarch }}/
-          cp README.md release-${{ matrix.goarch }}/
-          cd release-${{ matrix.goarch }}
-          zip -r ../release-${{ matrix.release_name }}.zip .
-          cd ..
+          mkdir release-${{ matrix.release_name }}
+          cp ${{ matrix.artifact_name }} release-${{ matrix.release_name }}/ideal.exe
+          cp config.json release-${{ matrix.release_name }}/
+          cp README.md release-${{ matrix.release_name }}/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.release_name }}
-          path: release-${{ matrix.release_name }}.zip
+          path: release-${{ matrix.release_name }}/
           if-no-files-found: error
