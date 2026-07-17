@@ -34,15 +34,6 @@ jobs:
             exe_name: ideal.exe
             cc: x86_64-w64-mingw32-gcc
             apt: gcc-mingw-w64-x86-64
-          - goos: windows
-            goarch: arm64
-            artifact_name: ideal-windows-arm64.exe
-            release_name: windows-arm64
-            exe_name: ideal.exe
-            # Absolute path: Gitea runners often ignore GITHUB_PATH updates.
-            cc: /opt/llvm-mingw/bin/aarch64-w64-mingw32-gcc
-            apt: ''
-            llvm_mingw: 'true'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -61,17 +52,7 @@ jobs:
       - name: Install C toolchain
         run: |
           sudo apt-get update
-          if [ -n "${{ matrix.apt }}" ]; then
-            sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
-          fi
-          if [ "${{ matrix.llvm_mingw }}" = "true" ]; then
-            curl -fsSL -o /tmp/llvm-mingw.tar.xz \
-              https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
-            sudo rm -rf /opt/llvm-mingw
-            sudo mkdir -p /opt/llvm-mingw
-            sudo tar -xJf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
-            "${{ matrix.cc }}" --version
-          fi
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
 
       - name: Build frontend (embedded SPA)
         working-directory: web
