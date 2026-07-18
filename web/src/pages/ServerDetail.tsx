@@ -387,6 +387,7 @@ function OverviewTab({
     extraLaunchParams: string;
     enabledCdlcs?: string[];
     cpuAffinity?: number[];
+    memoryLimitMB?: number;
   };
   isFullAdmin: boolean;
 }) {
@@ -414,6 +415,9 @@ function OverviewTab({
   const [extra, setExtra] = useState(srv.extraLaunchParams);
   const [enabledCdlcs, setEnabledCdlcs] = useState<string[]>(srv.enabledCdlcs ?? []);
   const [cpuAffinity, setCpuAffinity] = useState<number[]>(srv.cpuAffinity ?? []);
+  const [memoryLimitMB, setMemoryLimitMB] = useState(
+    srv.memoryLimitMB && srv.memoryLimitMB > 0 ? String(srv.memoryLimitMB) : "",
+  );
   const [saveError, setSaveError] = useState("");
 
   const branchIdNum = parseInt(branchId, 10);
@@ -442,6 +446,10 @@ function OverviewTab({
   useEffect(() => {
     setCpuAffinity(srv.cpuAffinity ?? []);
   }, [srv.cpuAffinity]);
+
+  useEffect(() => {
+    setMemoryLimitMB(srv.memoryLimitMB && srv.memoryLimitMB > 0 ? String(srv.memoryLimitMB) : "");
+  }, [srv.memoryLimitMB]);
 
   const takenByOther = useMemo(() => {
     const map = new Map<number, string>();
@@ -475,8 +483,18 @@ function OverviewTab({
   };
 
   const save = useMutation({
-    mutationFn: () =>
-      api.updateServer(serverId, {
+    mutationFn: () => {
+      let mem = 0;
+      if (isFullAdmin) {
+        const raw = memoryLimitMB.trim();
+        if (raw !== "") {
+          mem = parseInt(raw, 10);
+          if (!Number.isFinite(mem) || mem < 0) {
+            return Promise.reject(new Error("Memory limit must be empty (unlimited) or a positive number of MB"));
+          }
+        }
+      }
+      return api.updateServer(serverId, {
         name,
         branchId: parseInt(branchId, 10),
         modsetId: modsetId !== "none" ? parseInt(modsetId, 10) : null,
@@ -486,8 +504,9 @@ function OverviewTab({
         serverBinary,
         extraLaunchParams: extra,
         enabledCdlcs,
-        ...(isFullAdmin ? { cpuAffinity } : {}),
-      }),
+        ...(isFullAdmin ? { cpuAffinity, memoryLimitMB: mem } : {}),
+      });
+    },
     onSuccess: () => {
       setSaveError("");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
@@ -498,7 +517,7 @@ function OverviewTab({
       queryClient.invalidateQueries({ queryKey: ["headless", serverId] });
     },
     onError: (err) => {
-      setSaveError(err instanceof ApiError ? err.message : "Failed to save");
+      setSaveError(err instanceof ApiError || err instanceof Error ? err.message : "Failed to save");
     },
   });
 
@@ -719,6 +738,45 @@ function OverviewTab({
             ) : (
               <p className="text-sm text-muted-foreground">
                 Assigned by admin — {formatAffinityLabel(cpuAffinity ?? [])}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 border-t border-border pt-3">
+            <Label>Max RAM</Label>
+            <p className="text-xs text-muted-foreground">
+              Shared commit limit for this dedicated server and its headless clients. Empty =
+              unlimited. Takes effect on next start. Exceeding the limit typically crashes the
+              process.
+            </p>
+            {isFullAdmin ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={256}
+                  step={256}
+                  className="max-w-[10rem]"
+                  value={memoryLimitMB}
+                  onChange={(e) => setMemoryLimitMB(e.target.value)}
+                  placeholder="Unlimited"
+                />
+                <span className="text-sm text-muted-foreground">MB</span>
+                {memoryLimitMB.trim() !== "" && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setMemoryLimitMB("")}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {srv.memoryLimitMB && srv.memoryLimitMB > 0
+                  ? `${srv.memoryLimitMB} MB`
+                  : "Unlimited"}
               </p>
             )}
           </div>

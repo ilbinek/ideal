@@ -231,6 +231,9 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 	if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
 		log.Printf("[HC] affinity warning for server %d slot %d: %v", serverID, slot, err)
 	}
+	if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
+		log.Printf("[HC] memory limit warning for server %d slot %d: %v", serverID, slot, err)
+	}
 
 	if err := verifyHeadlessStartup(proc, 5*time.Second); err != nil {
 		_ = stopProcess(proc.pid)

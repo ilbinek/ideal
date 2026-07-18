@@ -254,6 +254,7 @@ export const api = {
       extraLaunchParams: string;
       enabledCdlcs: string[];
       cpuAffinity?: number[];
+      memoryLimitMB?: number;
     },
   ) =>
     request<{ ok: boolean }>(`/api/servers/${id}`, {

@@ -219,14 +219,15 @@ func filterServersForPrincipal(servers []database.Server, p *auth.Principal) []d
 
 func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name         string `json:"name"`
-		BranchID     int    `json:"branchId"`
-		ModsetID     *int   `json:"modsetId"`
-		GamePort     int    `json:"gamePort"`
-		SteamPort    int    `json:"steamPort"`
-		ProfileName  string `json:"profileName"`
-		ServerBinary string `json:"serverBinary"`
-		CPUAffinity  []int  `json:"cpuAffinity"`
+		Name           string `json:"name"`
+		BranchID       int    `json:"branchId"`
+		ModsetID       *int   `json:"modsetId"`
+		GamePort       int    `json:"gamePort"`
+		SteamPort      int    `json:"steamPort"`
+		ProfileName    string `json:"profileName"`
+		ServerBinary   string `json:"serverBinary"`
+		CPUAffinity    []int  `json:"cpuAffinity"`
+		MemoryLimitMB  int    `json:"memoryLimitMB"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -246,6 +247,11 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	affinityCSV, err := normalizeAndCheckAffinity(0, body.CPUAffinity)
 	if err != nil {
 		writeAffinityError(w, err)
+		return
+	}
+	memMB, err := server.ValidateMemoryLimitMB(body.MemoryLimitMB)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -269,6 +275,12 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	if affinityCSV != "" {
 		if err := database.UpdateServerCPUAffinity(int(id), affinityCSV); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to set CPU affinity")
+			return
+		}
+	}
+	if memMB > 0 {
+		if err := database.UpdateServerMemoryLimitMB(int(id), memMB); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set memory limit")
 			return
 		}
 	}
@@ -317,6 +329,7 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		ExtraLaunchParams string   `json:"extraLaunchParams"`
 		EnabledCdlcs      []string `json:"enabledCdlcs"`
 		CPUAffinity       *[]int   `json:"cpuAffinity"`
+		MemoryLimitMB     *int     `json:"memoryLimitMB"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -335,15 +348,28 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := auth.FromContext(r.Context())
-	if body.CPUAffinity != nil && p != nil && p.IsFullAdmin {
-		affinityCSV, err := normalizeAndCheckAffinity(id, *body.CPUAffinity)
-		if err != nil {
-			writeAffinityError(w, err)
-			return
+	if p != nil && p.IsFullAdmin {
+		if body.CPUAffinity != nil {
+			affinityCSV, err := normalizeAndCheckAffinity(id, *body.CPUAffinity)
+			if err != nil {
+				writeAffinityError(w, err)
+				return
+			}
+			if err := database.UpdateServerCPUAffinity(id, affinityCSV); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to set CPU affinity")
+				return
+			}
 		}
-		if err := database.UpdateServerCPUAffinity(id, affinityCSV); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to set CPU affinity")
-			return
+		if body.MemoryLimitMB != nil {
+			memMB, err := server.ValidateMemoryLimitMB(*body.MemoryLimitMB)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if err := database.UpdateServerMemoryLimitMB(id, memMB); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to set memory limit")
+				return
+			}
 		}
 	}
 

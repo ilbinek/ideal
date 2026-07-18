@@ -53,6 +53,7 @@ type Server struct {
 	SortOrder         int       `json:"sortOrder"`
 	CPUAffinity       string    `json:"-"` // stored CSV; exposed as cpuAffinity []int via JSON helpers below
 	CPUAffinityCPUs   []int     `json:"cpuAffinity"`
+	MemoryLimitMB     int       `json:"memoryLimitMB"` // 0 = unlimited; shared by dedicated + headless
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
 	ActiveRPT         string    `json:"activeRpt"`
@@ -174,6 +175,7 @@ func migrateServerColumns() error {
 		"ALTER TABLE arma_branches ADD COLUMN last_checked TIMESTAMP",
 		"ALTER TABLE arma_branches ADD COLUMN last_notified_build_id TEXT DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN cpu_affinity TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE servers ADD COLUMN memory_limit_mb INTEGER NOT NULL DEFAULT 0",
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -533,6 +535,7 @@ const serverSelectCols = `
 		COALESCE(mission_http_serve, 0),
 		COALESCE(sort_order, 0),
 		COALESCE(cpu_affinity, ''),
+		COALESCE(memory_limit_mb, 0),
 		status, pid, COALESCE(active_rpt, ''), created_at, updated_at`
 
 func GetServers() ([]Server, error) {
@@ -593,7 +596,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
 			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &enabledCdlcs, &s.HeadlessCount,
-			&missionHttpServe, &s.SortOrder, &s.CPUAffinity,
+			&missionHttpServe, &s.SortOrder, &s.CPUAffinity, &s.MemoryLimitMB,
 			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -748,6 +751,17 @@ func UpdateServerCPUAffinity(id int, cpuAffinity string) error {
 	_, err := db.Exec(`
 		UPDATE servers SET cpu_affinity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		cpuAffinity, id,
+	)
+	return err
+}
+
+func UpdateServerMemoryLimitMB(id int, memoryLimitMB int) error {
+	if memoryLimitMB < 0 {
+		memoryLimitMB = 0
+	}
+	_, err := db.Exec(`
+		UPDATE servers SET memory_limit_mb = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		memoryLimitMB, id,
 	)
 	return err
 }

@@ -162,6 +162,8 @@ export interface GameServer {
   sortOrder: number;
   /** Logical CPU indices (complete HT pairs). Empty = no pinning. */
   cpuAffinity: number[];
+  /** Shared RAM cap for dedicated + headless (MB). 0 = unlimited. */
+  memoryLimitMB: number;
   status: ServerStatus;
   pid: number;
   activeRpt: string;

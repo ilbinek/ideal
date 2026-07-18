@@ -151,6 +151,9 @@ func (m *Manager) adoptOrphans() {
 		if err := ApplyServerAffinity(s.PID, s.CPUAffinity); err != nil {
 			log.Printf("[SERVER] affinity on adopt pid=%d server=%d: %v", s.PID, s.ID, err)
 		}
+		if err := ApplyServerMemoryLimit(s.ID, s.PID, s.MemoryLimitMB); err != nil {
+			log.Printf("[SERVER] memory limit on adopt pid=%d server=%d: %v", s.PID, s.ID, err)
+		}
 		log.Printf("[SERVER] adopted orphan pid=%d server=%d (%s)", s.PID, s.ID, s.Slug)
 	}
 
@@ -193,6 +196,9 @@ func (m *Manager) adoptOrphans() {
 		if parent, err := database.GetServer(c.ServerID); err == nil {
 			if err := ApplyServerAffinity(c.PID, parent.CPUAffinity); err != nil {
 				log.Printf("[HC] affinity on adopt pid=%d server=%d slot=%d: %v", c.PID, c.ServerID, c.Slot, err)
+			}
+			if err := ApplyServerMemoryLimit(c.ServerID, c.PID, parent.MemoryLimitMB); err != nil {
+				log.Printf("[HC] memory limit on adopt pid=%d server=%d slot=%d: %v", c.PID, c.ServerID, c.Slot, err)
 			}
 		}
 		log.Printf("[HC] adopted orphan pid=%d server=%d slot=%d", c.PID, c.ServerID, c.Slot)
@@ -404,6 +410,9 @@ func (m *Manager) Start(serverID int) error {
 	if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
 		log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
 	}
+	if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
+		log.Printf("[SERVER] memory limit warning for %d: %v", serverID, err)
+	}
 
 	// Confirm the process did not die immediately (e.g. port still held on UDP).
 	if err := verifyProcessStartup(proc, srv.GamePort, 8*time.Second); err != nil {
@@ -563,6 +572,7 @@ func (m *Manager) Stop(serverID int) error {
 	}
 
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, inst.rptPath)
+	ReleaseServerMemoryLimit(serverID)
 	m.broadcast()
 	return nil
 }
@@ -580,6 +590,7 @@ func (m *Manager) stopOrphan(serverID int) error {
 	}
 	_ = waitForPortsFree(srv.GamePort, srv.SteamPort, 15*time.Second)
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, srv.ActiveRPT)
+	ReleaseServerMemoryLimit(serverID)
 	m.broadcast()
 	return nil
 }
@@ -724,6 +735,7 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 		activeRPT = srv.ActiveRPT
 	}
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, activeRPT)
+	ReleaseServerMemoryLimit(serverID)
 	m.broadcast()
 }
 

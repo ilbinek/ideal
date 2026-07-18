@@ -284,6 +284,11 @@ export function Servers() {
                           .join(",")}
                       </Badge>
                     )}
+                    {perms.isFullAdmin && (srv.memoryLimitMB ?? 0) > 0 && (
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        RAM {srv.memoryLimitMB} MB
+                      </Badge>
+                    )}
                   </div>
                   <CardDescription className="font-mono text-xs">
                     {branchName(srv.branchId)} · :{srv.gamePort}
