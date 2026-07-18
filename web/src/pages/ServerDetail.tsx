@@ -251,7 +251,9 @@ export function ServerDetail() {
         ))}
       </div>
 
-      {tab === "overview" && <OverviewTab serverId={serverId} srv={srv} />}
+      {tab === "overview" && (
+        <OverviewTab serverId={serverId} srv={srv} isFullAdmin={perms.isFullAdmin} />
+      )}
       {tab === "mods" && <ModsTab serverId={serverId} />}
       {tab === "keys" && <KeysTab serverId={serverId} />}
       {tab === "config" && <ConfigTab serverId={serverId} serverStatus={status} />}
@@ -349,9 +351,29 @@ function LiveMetricsCard({ serverId }: { serverId: number }) {
   );
 }
 
+function formatAffinityLabel(cpus: number[]): string {
+  if (!cpus.length) return "Not pinned (all cores)";
+  const sorted = [...cpus].sort((a, b) => a - b);
+  const ranges: string[] = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur === prev + 1) {
+      prev = cur;
+      continue;
+    }
+    ranges.push(start === prev ? String(start) : `${start}–${prev}`);
+    start = cur;
+    prev = cur;
+  }
+  return `Cores ${ranges.join(", ")}`;
+}
+
 function OverviewTab({
   serverId,
   srv,
+  isFullAdmin,
 }: {
   serverId: number;
   srv: {
@@ -364,11 +386,19 @@ function OverviewTab({
     serverBinary: string;
     extraLaunchParams: string;
     enabledCdlcs?: string[];
+    cpuAffinity?: number[];
   };
+  isFullAdmin: boolean;
 }) {
   const queryClient = useQueryClient();
   const branches = useQuery({ queryKey: ["branches"], queryFn: () => api.getBranches() });
   const modsets = useQuery({ queryKey: ["modsets"], queryFn: () => api.getModsets() });
+  const servers = useQuery({ queryKey: ["servers"], queryFn: () => api.getServers() });
+  const topology = useQuery({
+    queryKey: ["cpuTopology"],
+    queryFn: () => api.getCpuTopology(),
+    enabled: isFullAdmin,
+  });
   const launch = useQuery({
     queryKey: ["launch", serverId],
     queryFn: () => api.getLaunchPreview(serverId),
@@ -383,6 +413,8 @@ function OverviewTab({
   const [serverBinary, setServerBinary] = useState(srv.serverBinary ?? "");
   const [extra, setExtra] = useState(srv.extraLaunchParams);
   const [enabledCdlcs, setEnabledCdlcs] = useState<string[]>(srv.enabledCdlcs ?? []);
+  const [cpuAffinity, setCpuAffinity] = useState<number[]>(srv.cpuAffinity ?? []);
+  const [saveError, setSaveError] = useState("");
 
   const branchIdNum = parseInt(branchId, 10);
   const binaries = useQuery({
@@ -407,6 +439,41 @@ function OverviewTab({
     setEnabledCdlcs(srv.enabledCdlcs ?? []);
   }, [srv.enabledCdlcs]);
 
+  useEffect(() => {
+    setCpuAffinity(srv.cpuAffinity ?? []);
+  }, [srv.cpuAffinity]);
+
+  const takenByOther = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const s of servers.data ?? []) {
+      if (s.id === serverId) continue;
+      for (const c of s.cpuAffinity ?? []) {
+        map.set(c, s.name);
+      }
+    }
+    return map;
+  }, [servers.data, serverId]);
+
+  const togglePair = (pair: number[]) => {
+    const sortedPair = [...pair].sort((a, b) => a - b);
+    const allSelected = sortedPair.every((c) => cpuAffinity.includes(c));
+    if (allSelected) {
+      setCpuAffinity((prev) => prev.filter((c) => !sortedPair.includes(c)));
+      return;
+    }
+    for (const c of sortedPair) {
+      const owner = takenByOther.get(c);
+      if (owner) {
+        setSaveError(`Core ${c} is already assigned to ${owner}`);
+        return;
+      }
+    }
+    setSaveError("");
+    setCpuAffinity((prev) =>
+      [...new Set([...prev, ...sortedPair])].sort((a, b) => a - b),
+    );
+  };
+
   const save = useMutation({
     mutationFn: () =>
       api.updateServer(serverId, {
@@ -419,13 +486,19 @@ function OverviewTab({
         serverBinary,
         extraLaunchParams: extra,
         enabledCdlcs,
+        ...(isFullAdmin ? { cpuAffinity } : {}),
       }),
     onSuccess: () => {
+      setSaveError("");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
       queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
       queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
       queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
       queryClient.invalidateQueries({ queryKey: ["headless", serverId] });
+    },
+    onError: (err) => {
+      setSaveError(err instanceof ApiError ? err.message : "Failed to save");
     },
   });
 
@@ -439,6 +512,7 @@ function OverviewTab({
 
   const binaryOptions = binaries.data?.binaries ?? [];
   const preferredBinary = binaries.data?.preferred ?? "";
+  const pairs = topology.data?.pairs ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -467,6 +541,10 @@ function OverviewTab({
                 </option>
               ))}
             </select>
+            <p className="text-xs text-muted-foreground">
+              Branch files are shared by all servers on this branch. Stop every server using a branch
+              before updating it.
+            </p>
           </div>
           <div className="flex flex-col gap-1">
             <Label>Server binary</Label>
@@ -574,6 +652,82 @@ function OverviewTab({
               </div>
             )}
           </div>
+
+          <div className="flex flex-col gap-2 border-t border-border pt-3">
+            <Label>CPU affinity</Label>
+            <p className="text-xs text-muted-foreground">
+              {formatAffinityLabel(cpuAffinity)}. Headless clients use the same cores. Empty means
+              no pinning.
+            </p>
+            {isFullAdmin ? (
+              <>
+                {topology.isLoading ? (
+                  <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {pairs.map((pair) => {
+                      const sorted = [...pair].sort((a, b) => a - b);
+                      const selected = sorted.every((c) => cpuAffinity.includes(c));
+                      const blocked = sorted.some(
+                        (c) => takenByOther.has(c) && !cpuAffinity.includes(c),
+                      );
+                      const owner = sorted
+                        .map((c) => takenByOther.get(c))
+                        .find(Boolean);
+                      const label =
+                        sorted.length === 1
+                          ? String(sorted[0])
+                          : `${sorted[0]}–${sorted[sorted.length - 1]}`;
+                      return (
+                        <button
+                          key={sorted.join("-")}
+                          type="button"
+                          disabled={blocked && !selected}
+                          title={
+                            blocked && !selected
+                              ? `Used by ${owner}`
+                              : `Toggle HT pair ${label}`
+                          }
+                          onClick={() => togglePair(sorted)}
+                          className={`rounded-md border px-2.5 py-1.5 font-mono text-xs transition-colors ${
+                            selected
+                              ? "border-foreground bg-foreground text-background"
+                              : blocked
+                                ? "cursor-not-allowed border-border opacity-40"
+                                : "border-input bg-background hover:bg-muted"
+                          }`}
+                        >
+                          {label}
+                          {blocked && !selected ? " · taken" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {cpuAffinity.length > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="self-start"
+                    onClick={() => setCpuAffinity([])}
+                  >
+                    Clear affinity
+                  </Button>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Assigned by admin — {formatAffinityLabel(cpuAffinity ?? [])}
+              </p>
+            )}
+          </div>
+
+          {saveError && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {saveError}
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
               Save

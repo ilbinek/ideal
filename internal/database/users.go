@@ -12,16 +12,16 @@ const (
 )
 
 type User struct {
-	ID                 int       `json:"id"`
-	SteamID            string    `json:"steamId"`
-	DisplayName        string    `json:"displayName"`
-	AvatarURL          string    `json:"avatarUrl"`
-	IsFullAdmin        bool      `json:"isFullAdmin"`
-	CanManageMods      bool      `json:"canManageMods"`
-	CanManageBranches  bool      `json:"canManageBranches"`
-	ServerIDs          []int     `json:"serverIds"`
-	CreatedAt          time.Time `json:"createdAt"`
-	LastLoginAt        time.Time `json:"lastLoginAt"`
+	ID                int        `json:"id"`
+	SteamID           string     `json:"steamId"`
+	DisplayName       string     `json:"displayName"`
+	AvatarURL         string     `json:"avatarUrl"`
+	IsFullAdmin       bool       `json:"isFullAdmin"`
+	CanManageMods     bool       `json:"canManageMods"`
+	CanManageBranches bool       `json:"canManageBranches"`
+	ServerIDs         []int      `json:"serverIds"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	LastLoginAt       *time.Time `json:"lastLoginAt,omitempty"`
 }
 
 type SessionRow struct {
@@ -85,7 +85,7 @@ func UpsertSteamUser(steamID, displayName, avatarURL string) (*User, error) {
 		}
 		existing.DisplayName = displayName
 		existing.AvatarURL = avatarURL
-		existing.LastLoginAt = now
+		existing.LastLoginAt = &now
 		return existing, nil
 	}
 	if err != nil && err != sql.ErrNoRows {
@@ -95,6 +95,25 @@ func UpsertSteamUser(steamID, displayName, avatarURL string) (*User, error) {
 	res, err := db.Exec(
 		`INSERT INTO users (steam_id, display_name, avatar_url, last_login_at) VALUES (?, ?, ?, ?)`,
 		steamID, displayName, avatarURL, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return GetUser(int(id))
+}
+
+// CreateSteamUser inserts a user who has not logged in yet (last_login_at NULL).
+func CreateSteamUser(steamID, displayName, avatarURL string) (*User, error) {
+	if displayName == "" {
+		displayName = steamID
+	}
+	res, err := db.Exec(
+		`INSERT INTO users (steam_id, display_name, avatar_url, last_login_at) VALUES (?, ?, ?, NULL)`,
+		steamID, displayName, avatarURL,
 	)
 	if err != nil {
 		return nil, err
@@ -121,7 +140,8 @@ func GetUser(id int) (*User, error) {
 		return nil, err
 	}
 	if lastLogin.Valid {
-		u.LastLoginAt = lastLogin.Time
+		t := lastLogin.Time
+		u.LastLoginAt = &t
 	}
 	ids, err := GetUserServerIDs(u.ID)
 	if err != nil {
@@ -146,7 +166,8 @@ func GetUserBySteamID(steamID string) (*User, error) {
 		return nil, err
 	}
 	if lastLogin.Valid {
-		u.LastLoginAt = lastLogin.Time
+		t := lastLogin.Time
+		u.LastLoginAt = &t
 	}
 	ids, err := GetUserServerIDs(u.ID)
 	if err != nil {
@@ -178,7 +199,8 @@ func ListUsers() ([]User, error) {
 			return nil, err
 		}
 		if lastLogin.Valid {
-			u.LastLoginAt = lastLogin.Time
+			t := lastLogin.Time
+			u.LastLoginAt = &t
 		}
 		u.ServerIDs = []int{}
 		out = append(out, u)

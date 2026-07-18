@@ -76,7 +76,7 @@ export function Branches() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Branches"
-        description="Central Arma 3 dedicated server installs (built-in downloader by default; override in Settings). Update re-checks installed files against the CDN."
+        description="Central Arma 3 dedicated server installs (built-in downloader by default; override in Settings). Update re-checks installed files against the CDN. All servers on a branch share those files — stop them before updating."
         actions={
           <Button variant="outline" asChild>
             <Link to="/servers">Back to servers</Link>

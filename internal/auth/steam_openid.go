@@ -177,6 +177,11 @@ func verifySteamOpenID(r *http.Request) (string, error) {
 }
 
 func fetchSteamPersona(steamID string) (displayName, avatarURL string) {
+	return FetchSteamPersona(steamID)
+}
+
+// FetchSteamPersona looks up display name and avatar via the Steam Web API when a key is configured.
+func FetchSteamPersona(steamID string) (displayName, avatarURL string) {
 	cfg, err := database.GetConfig()
 	if err != nil || cfg == nil || cfg.ApiKey == "" {
 		return "", ""

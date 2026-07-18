@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +51,8 @@ type Server struct {
 	MissionHttpServe  bool      `json:"missionHttpServe"`
 	MissionHttpPath   string    `json:"missionHttpPath"`
 	SortOrder         int       `json:"sortOrder"`
+	CPUAffinity       string    `json:"-"` // stored CSV; exposed as cpuAffinity []int via JSON helpers below
+	CPUAffinityCPUs   []int     `json:"cpuAffinity"`
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
 	ActiveRPT         string    `json:"activeRpt"`
@@ -169,6 +173,7 @@ func migrateServerColumns() error {
 		"ALTER TABLE arma_branches ADD COLUMN update_available BOOLEAN DEFAULT 0",
 		"ALTER TABLE arma_branches ADD COLUMN last_checked TIMESTAMP",
 		"ALTER TABLE arma_branches ADD COLUMN last_notified_build_id TEXT DEFAULT ''",
+		"ALTER TABLE servers ADD COLUMN cpu_affinity TEXT NOT NULL DEFAULT ''",
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -527,6 +532,7 @@ const serverSelectCols = `
 		COALESCE(headless_count, 0),
 		COALESCE(mission_http_serve, 0),
 		COALESCE(sort_order, 0),
+		COALESCE(cpu_affinity, ''),
 		status, pid, COALESCE(active_rpt, ''), created_at, updated_at`
 
 func GetServers() ([]Server, error) {
@@ -587,7 +593,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
 			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &enabledCdlcs, &s.HeadlessCount,
-			&missionHttpServe, &s.SortOrder,
+			&missionHttpServe, &s.SortOrder, &s.CPUAffinity,
 			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -599,9 +605,63 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 		s.EnabledCdlcs = DecodeCdlcs(enabledCdlcs)
 		s.MissionHttpServe = missionHttpServe != 0
 		s.MissionHttpPath = MissionHttpPath(s.Slug)
+		s.CPUAffinityCPUs = ParseCPUAffinity(s.CPUAffinity)
 		servers = append(servers, s)
 	}
 	return servers, rows.Err()
+}
+
+// ParseCPUAffinity parses "0,1,4,5" into sorted unique ints.
+func ParseCPUAffinity(s string) []int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []int{}
+	}
+	parts := strings.Split(s, ",")
+	seen := make(map[int]struct{}, len(parts))
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// FormatCPUAffinity stores sorted unique CPUs as CSV.
+func FormatCPUAffinity(cpus []int) string {
+	seen := make(map[int]struct{}, len(cpus))
+	out := make([]int, 0, len(cpus))
+	for _, c := range cpus {
+		if c < 0 {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	sort.Ints(out)
+	if len(out) == 0 {
+		return ""
+	}
+	parts := make([]string, len(out))
+	for i, c := range out {
+		parts[i] = strconv.Itoa(c)
+	}
+	return strings.Join(parts, ",")
 }
 
 func CreateServer(name, slug string, branchID int, modsetID *int, gamePort, steamPort int, profileName, serverBinary string) (int64, error) {
@@ -682,6 +742,14 @@ func UpdateServer(id int, name string, branchID int, modsetID *int, gamePort, st
 		return RefreshHeadlessProfileNames(id, name, srv.Slug)
 	}
 	return nil
+}
+
+func UpdateServerCPUAffinity(id int, cpuAffinity string) error {
+	_, err := db.Exec(`
+		UPDATE servers SET cpu_affinity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		cpuAffinity, id,
+	)
+	return err
 }
 
 func UpdateServerStatus(id int, status string, pid int, activeRPT string) error {

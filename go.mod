@@ -7,6 +7,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.19
 	github.com/shirou/gopsutil/v4 v4.26.6
 	golang.org/x/net v0.32.0
+	golang.org/x/sys v0.41.0
 )
 
 require (
@@ -19,7 +20,6 @@ require (
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
 )
 
 require (

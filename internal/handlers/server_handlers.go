@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -225,6 +226,7 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 		SteamPort    int    `json:"steamPort"`
 		ProfileName  string `json:"profileName"`
 		ServerBinary string `json:"serverBinary"`
+		CPUAffinity  []int  `json:"cpuAffinity"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -239,6 +241,12 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.SteamPort == 0 {
 		body.SteamPort = body.GamePort + 1
+	}
+
+	affinityCSV, err := normalizeAndCheckAffinity(0, body.CPUAffinity)
+	if err != nil {
+		writeAffinityError(w, err)
+		return
 	}
 
 	baseSlug := server.SlugFromName(body.Name)
@@ -256,6 +264,13 @@ func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create server: "+err.Error())
 		return
+	}
+
+	if affinityCSV != "" {
+		if err := database.UpdateServerCPUAffinity(int(id), affinityCSV); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set CPU affinity")
+			return
+		}
 	}
 
 	if body.ModsetID != nil {
@@ -301,6 +316,7 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		ServerBinary      string   `json:"serverBinary"`
 		ExtraLaunchParams string   `json:"extraLaunchParams"`
 		EnabledCdlcs      []string `json:"enabledCdlcs"`
+		CPUAffinity       *[]int   `json:"cpuAffinity"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -317,6 +333,20 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update server")
 		return
 	}
+
+	p := auth.FromContext(r.Context())
+	if body.CPUAffinity != nil && p != nil && p.IsFullAdmin {
+		affinityCSV, err := normalizeAndCheckAffinity(id, *body.CPUAffinity)
+		if err != nil {
+			writeAffinityError(w, err)
+			return
+		}
+		if err := database.UpdateServerCPUAffinity(id, affinityCSV); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set CPU affinity")
+			return
+		}
+	}
+
 	if modsetChanged {
 		if body.ModsetID != nil {
 			if err := database.SeedServerModsFromModset(id, *body.ModsetID); err != nil {
@@ -344,6 +374,42 @@ func UpdateServerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func HostCPUTopologyHandler(w http.ResponseWriter, r *http.Request) {
+	topo, err := server.GetCPUTopology()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read CPU topology")
+		return
+	}
+	writeJSON(w, http.StatusOK, topo)
+}
+
+func normalizeAndCheckAffinity(excludeServerID int, cpus []int) (string, error) {
+	if cpus == nil {
+		cpus = []int{}
+	}
+	topo, err := server.GetCPUTopology()
+	if err != nil {
+		return "", err
+	}
+	normalized, err := server.NormalizeAffinity(cpus, topo)
+	if err != nil {
+		return "", err
+	}
+	if err := server.FindAffinityConflict(excludeServerID, normalized); err != nil {
+		return "", err
+	}
+	return server.FormatAffinity(normalized), nil
+}
+
+func writeAffinityError(w http.ResponseWriter, err error) {
+	var conflict *server.AffinityConflictError
+	if errors.As(err, &conflict) {
+		writeError(w, http.StatusConflict, conflict.Error())
+		return
+	}
+	writeError(w, http.StatusBadRequest, err.Error())
 }
 
 func stringSlicesEqual(a, b []string) bool {
@@ -415,6 +481,11 @@ func StartServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := server.Default.Start(id); err != nil {
+		var conflict *server.AffinityConflictError
+		if errors.As(err, &conflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -276,6 +276,14 @@ export function Servers() {
                       </Link>
                     </CardTitle>
                     <Badge variant={statusVariant(status)}>{status}</Badge>
+                    {perms.isFullAdmin && (srv.cpuAffinity?.length ?? 0) > 0 && (
+                      <Badge variant="outline" className="font-mono text-[10px]">
+                        CPU{" "}
+                        {[...(srv.cpuAffinity ?? [])]
+                          .sort((a, b) => a - b)
+                          .join(",")}
+                      </Badge>
+                    )}
                   </div>
                   <CardDescription className="font-mono text-xs">
                     {branchName(srv.branchId)} · :{srv.gamePort}

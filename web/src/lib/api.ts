@@ -2,6 +2,7 @@ import type {
   AppUser,
   ArmaBranch,
   CdlcCatalog,
+  CPUTopology,
   Downloader,
   DownloadScope,
   GameServer,
@@ -84,6 +85,17 @@ export const api = {
 
   // Users
   getUsers: () => request<AppUser[]>("/api/users"),
+  createUser: (body: {
+    steamId: string;
+    isFullAdmin?: boolean;
+    canManageMods?: boolean;
+    canManageBranches?: boolean;
+    serverIds?: number[];
+  }) =>
+    request<AppUser>("/api/users", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   updateUser: (
     id: number,
     body: {
@@ -99,6 +111,8 @@ export const api = {
     }),
   deleteUser: (id: number) =>
     request<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
+
+  getCpuTopology: () => request<CPUTopology>("/api/host/cpu-topology"),
 
   // Settings
   getSettings: () => request<Settings>("/api/settings"),
@@ -239,6 +253,7 @@ export const api = {
       serverBinary: string;
       extraLaunchParams: string;
       enabledCdlcs: string[];
+      cpuAffinity?: number[];
     },
   ) =>
     request<{ ok: boolean }>(`/api/servers/${id}`, {

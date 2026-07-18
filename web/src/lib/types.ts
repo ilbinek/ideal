@@ -107,7 +107,7 @@ export interface AppUser {
   canManageBranches: boolean;
   serverIds: number[];
   createdAt: string;
-  lastLoginAt: string;
+  lastLoginAt?: string | null;
 }
 
 export interface ArmaBranch {
@@ -160,11 +160,18 @@ export interface GameServer {
   missionHttpServe: boolean;
   missionHttpPath: string;
   sortOrder: number;
+  /** Logical CPU indices (complete HT pairs). Empty = no pinning. */
+  cpuAffinity: number[];
   status: ServerStatus;
   pid: number;
   activeRpt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CPUTopology {
+  logicalCount: number;
+  pairs: number[][];
 }
 
 export interface CdlcInfo {

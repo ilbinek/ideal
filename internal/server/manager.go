@@ -148,6 +148,9 @@ func (m *Manager) adoptOrphans() {
 		if s.Status != database.ServerStatusRunning {
 			_ = database.UpdateServerStatus(s.ID, database.ServerStatusRunning, s.PID, s.ActiveRPT)
 		}
+		if err := ApplyServerAffinity(s.PID, s.CPUAffinity); err != nil {
+			log.Printf("[SERVER] affinity on adopt pid=%d server=%d: %v", s.PID, s.ID, err)
+		}
 		log.Printf("[SERVER] adopted orphan pid=%d server=%d (%s)", s.PID, s.ID, s.Slug)
 	}
 
@@ -186,6 +189,11 @@ func (m *Manager) adoptOrphans() {
 		}{c.ServerID, c.Slot, gen})
 		if c.Status != database.ServerStatusRunning {
 			_ = database.UpdateHeadlessStatus(c.ServerID, c.Slot, database.ServerStatusRunning, c.PID, c.ActiveRPT)
+		}
+		if parent, err := database.GetServer(c.ServerID); err == nil {
+			if err := ApplyServerAffinity(c.PID, parent.CPUAffinity); err != nil {
+				log.Printf("[HC] affinity on adopt pid=%d server=%d slot=%d: %v", c.PID, c.ServerID, c.Slot, err)
+			}
 		}
 		log.Printf("[HC] adopted orphan pid=%d server=%d slot=%d", c.PID, c.ServerID, c.Slot)
 	}
@@ -353,6 +361,10 @@ func (m *Manager) Start(serverID int) error {
 		return err
 	}
 
+	if err := FindRunningAffinityConflict(serverID, ParseAffinity(srv.CPUAffinity)); err != nil {
+		return err
+	}
+
 	if err := ProvisionServer(serverID); err != nil {
 		return err
 	}
@@ -387,6 +399,10 @@ func (m *Manager) Start(serverID int) error {
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
 		m.broadcast()
 		return err
+	}
+
+	if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
+		log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
 	}
 
 	// Confirm the process did not die immediately (e.g. port still held on UDP).

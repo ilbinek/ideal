@@ -26,8 +26,12 @@ func APIHandler() http.Handler {
 
 	// Users (full admin)
 	mux.HandleFunc("GET /api/users", apiFullAdmin(ListUsersHandler))
+	mux.HandleFunc("POST /api/users", apiFullAdmin(CreateUserHandler))
 	mux.HandleFunc("PATCH /api/users/{id}", apiFullAdmin(UpdateUserHandler))
 	mux.HandleFunc("DELETE /api/users/{id}", apiFullAdmin(DeleteUserHandler))
+
+	// Host topology (full admin)
+	mux.HandleFunc("GET /api/host/cpu-topology", apiFullAdmin(HostCPUTopologyHandler))
 
 	// Settings (full admin)
 	mux.HandleFunc("GET /api/settings", apiFullAdmin(GetSettingsHandler))

@@ -228,6 +228,10 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 		return err
 	}
 
+	if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
+		log.Printf("[HC] affinity warning for server %d slot %d: %v", serverID, slot, err)
+	}
+
 	if err := verifyHeadlessStartup(proc, 5*time.Second); err != nil {
 		_ = stopProcess(proc.pid)
 		_ = proc.wait(5 * time.Second)

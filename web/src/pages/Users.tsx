@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2, Users as UsersIcon } from "lucide-react";
+import { Loader2, Plus, Trash2, Users as UsersIcon } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { AppUser } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -14,6 +15,8 @@ import {
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/PageHeader";
+
+const steamId64Re = /^7656119\d{10}$/;
 
 export function UsersPage() {
   const queryClient = useQueryClient();
@@ -49,11 +52,28 @@ export function UsersPage() {
     },
   });
 
+  const create = useMutation({
+    mutationFn: (body: {
+      steamId: string;
+      isFullAdmin: boolean;
+      canManageMods: boolean;
+      canManageBranches: boolean;
+      serverIds: number[];
+    }) => api.createUser(body),
+    onSuccess: () => {
+      setError("");
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+    onError: (err) => {
+      setError(err instanceof ApiError ? err.message : "Failed to add user");
+    },
+  });
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Users"
-        description="Steam accounts that have signed in. Grant roles before they can use the app."
+        description="Add Steam users by SteamID64 and grant roles before or after they sign in."
       />
 
       {error && (
@@ -61,6 +81,14 @@ export function UsersPage() {
           {error}
         </p>
       )}
+
+      <AddUserCard
+        servers={servers.data ?? []}
+        creating={create.isPending}
+        onCreate={async (body) => {
+          await create.mutateAsync(body);
+        }}
+      />
 
       {users.isLoading ? (
         <div className="flex justify-center py-12">
@@ -74,8 +102,8 @@ export function UsersPage() {
               No Steam users yet
             </CardTitle>
             <CardDescription>
-              Enable Steam login in config.json, then have users sign in once.
-              They appear here with no permissions until you grant roles.
+              Add a user above with their SteamID64, or enable Steam login in config.json and let
+              them sign in once.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -98,6 +126,153 @@ export function UsersPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function AddUserCard({
+  servers,
+  creating,
+  onCreate,
+}: {
+  servers: { id: number; name: string }[];
+  creating: boolean;
+  onCreate: (body: {
+    steamId: string;
+    isFullAdmin: boolean;
+    canManageMods: boolean;
+    canManageBranches: boolean;
+    serverIds: number[];
+  }) => Promise<void>;
+}) {
+  const [steamId, setSteamId] = useState("");
+  const [isFullAdmin, setIsFullAdmin] = useState(false);
+  const [canManageMods, setCanManageMods] = useState(false);
+  const [canManageBranches, setCanManageBranches] = useState(false);
+  const [serverIds, setServerIds] = useState<number[]>([]);
+  const [localError, setLocalError] = useState("");
+
+  const toggleServer = (serverId: number) => {
+    setServerIds((ids) =>
+      ids.includes(serverId)
+        ? ids.filter((id) => id !== serverId)
+        : [...ids, serverId].sort((a, b) => a - b),
+    );
+  };
+
+  const submit = async () => {
+    const id = steamId.trim();
+    if (!steamId64Re.test(id)) {
+      setLocalError("Enter a 17-digit SteamID64 starting with 7656119");
+      return;
+    }
+    setLocalError("");
+    try {
+      await onCreate({
+        steamId: id,
+        isFullAdmin,
+        canManageMods: isFullAdmin || canManageMods,
+        canManageBranches: isFullAdmin || canManageBranches,
+        serverIds: isFullAdmin ? [] : serverIds,
+      });
+      setSteamId("");
+      setIsFullAdmin(false);
+      setCanManageMods(false);
+      setCanManageBranches(false);
+      setServerIds([]);
+    } catch {
+      // Parent surfaces API errors.
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Plus className="size-4" />
+          Add user
+        </CardTitle>
+        <CardDescription>
+          Paste a numeric SteamID64. Persona name/avatar are fetched when a Steam Web API key is
+          configured.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="new-steam-id">SteamID64</Label>
+          <Input
+            id="new-steam-id"
+            value={steamId}
+            onChange={(e) => setSteamId(e.target.value)}
+            placeholder="76561198000000000"
+            className="font-mono"
+          />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Toggle
+            id="add-full"
+            label="Full admin"
+            checked={isFullAdmin}
+            onChange={(v) => {
+              setIsFullAdmin(v);
+              if (v) {
+                setCanManageMods(true);
+                setCanManageBranches(true);
+              }
+            }}
+          />
+          <Toggle
+            id="add-mods"
+            label="Manage mods"
+            checked={isFullAdmin || canManageMods}
+            disabled={isFullAdmin}
+            onChange={setCanManageMods}
+          />
+          <Toggle
+            id="add-branches"
+            label="Manage branches"
+            checked={isFullAdmin || canManageBranches}
+            disabled={isFullAdmin}
+            onChange={setCanManageBranches}
+          />
+        </div>
+
+        <div>
+          <Label className="mb-2 block">Server admin</Label>
+          {servers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No servers to assign.</p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {servers.map((s) => (
+                <label
+                  key={s.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={isFullAdmin || serverIds.includes(s.id)}
+                    disabled={isFullAdmin}
+                    onChange={() => toggleServer(s.id)}
+                  />
+                  {s.name}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {localError && (
+          <p className="text-sm text-destructive">{localError}</p>
+        )}
+
+        <div className="flex justify-end">
+          <Button onClick={submit} disabled={creating || !steamId.trim()}>
+            {creating && <Loader2 className="size-4 animate-spin" />}
+            Add user
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -141,6 +316,8 @@ function UserCard({
     });
   };
 
+  const neverLoggedIn = !user.lastLoginAt;
+
   return (
     <Card>
       <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
@@ -159,10 +336,14 @@ function UserCard({
           <div>
             <CardTitle className="text-base">{user.displayName || user.steamId}</CardTitle>
             <CardDescription className="font-mono text-xs">{user.steamId}</CardDescription>
+            {neverLoggedIn && (
+              <p className="mt-1 text-xs text-muted-foreground">Never logged in</p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
           {user.isFullAdmin && <Badge>Full admin</Badge>}
+          {neverLoggedIn && <Badge variant="secondary">Pending login</Badge>}
           <Button variant="ghost" size="icon" onClick={onDelete} title="Remove user">
             <Trash2 className="size-4" />
           </Button>
