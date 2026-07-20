@@ -233,6 +233,39 @@ func DeleteModsetAPIHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func UpdateModsetAPIHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid modset id")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if err := database.UpdateModset(id, name); err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, http.StatusNotFound, "modset not found")
+			return
+		}
+		if strings.Contains(err.Error(), "UNIQUE") {
+			writeError(w, http.StatusConflict, "a modset with this name already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to update modset")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // --- Mods ---
 
 func GetModsHandler(w http.ResponseWriter, r *http.Request) {

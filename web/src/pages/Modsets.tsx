@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Terminal, Trash2, Upload } from "lucide-react";
+import { Loader2, Pencil, Terminal, Trash2, Upload } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -33,6 +35,8 @@ export function Modsets() {
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
   const [pendingDelete, setPendingDelete] = useState<Modset | null>(null);
+  const [pendingRename, setPendingRename] = useState<Modset | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const { data: modsets } = useQuery({
     queryKey: ["modsets"],
@@ -60,6 +64,25 @@ export function Modsets() {
     onError: (e) =>
       toast.error("Delete failed", e instanceof ApiError ? e.message : undefined),
   });
+
+  const rename = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      api.updateModset(id, name),
+    onSuccess: () => {
+      toast.success("Modset renamed");
+      queryClient.invalidateQueries({ queryKey: ["modsets"] });
+      setPendingRename(null);
+    },
+    onError: (e) =>
+      toast.error("Rename failed", e instanceof ApiError ? e.message : undefined),
+  });
+
+  const trimmedRename = renameValue.trim();
+  const canSaveRename =
+    !!pendingRename &&
+    trimmedRename !== "" &&
+    trimmedRename !== pendingRename.name &&
+    !rename.isPending;
 
   return (
     <div className="flex flex-col gap-6">
@@ -128,6 +151,17 @@ export function Modsets() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          onClick={() => {
+                            setPendingRename(m);
+                            setRenameValue(m.name);
+                          }}
+                          title="Rename modset"
+                        >
+                          <Pencil className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           onClick={() => setPendingDelete(m)}
                           title="Delete modset"
                         >
@@ -167,6 +201,51 @@ export function Modsets() {
             >
               {remove.isPending && <Loader2 className="size-4 animate-spin" />}
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!pendingRename}
+        onOpenChange={(o) => {
+          if (!o) setPendingRename(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename modset</DialogTitle>
+            <DialogDescription>
+              Choose a new name for “{pendingRename?.name}”.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2">
+            <Label htmlFor="modset-rename">Name</Label>
+            <Input
+              id="modset-rename"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && canSaveRename && pendingRename) {
+                  rename.mutate({ id: pendingRename.id, name: trimmedRename });
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button
+              disabled={!canSaveRename}
+              onClick={() =>
+                pendingRename &&
+                rename.mutate({ id: pendingRename.id, name: trimmedRename })
+              }
+            >
+              {rename.isPending && <Loader2 className="size-4 animate-spin" />}
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -221,6 +221,21 @@ func GetModsets() ([]Modset, error) {
 	return modsets, rows.Err()
 }
 
+func UpdateModset(id int, name string) error {
+	result, err := db.Exec("UPDATE modsets SET name = ? WHERE id = ?", name, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func DeleteModset(id int) error {
 	_, err := db.Exec("DELETE FROM modsets WHERE id = ?", id)
 	return err
