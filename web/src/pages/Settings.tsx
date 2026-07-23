@@ -32,6 +32,7 @@ export function SettingsPage() {
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(4);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(0);
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
+  const [useDocker, setUseDocker] = useState(false);
 
   useEffect(() => {
     if (data) {
@@ -43,6 +44,7 @@ export function SettingsPage() {
       setMaxConcurrentDownloads(data.maxConcurrentDownloads || 4);
       setUpdateCheckIntervalMinutes(data.updateCheckIntervalMinutes || 0);
       setDiscordWebhookUrl(data.discordWebhookUrl || "");
+      setUseDocker(!!data.useDocker);
     }
   }, [data]);
 
@@ -58,6 +60,7 @@ export function SettingsPage() {
         maxConcurrentDownloads,
         updateCheckIntervalMinutes,
         discordWebhookUrl,
+        useDocker,
       }),
     onSuccess: () => {
       toast.success("Settings saved");
@@ -69,6 +72,8 @@ export function SettingsPage() {
   });
 
   const isGoSteam = downloader === "gosteam";
+  const dockerSupported = data?.platform === "linux";
+  const dockerToggleEnabled = dockerSupported && !!data?.dockerAvailable;
 
   return (
     <form
@@ -256,6 +261,38 @@ export function SettingsPage() {
               Leave blank to update flags in the UI without sending Discord messages.
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="max-w-xl">
+        <CardHeader>
+          <CardTitle className="text-base">Server isolation</CardTitle>
+          <CardDescription>
+            Run each dedicated server (and its headless clients) in a local Docker
+            container. Linux only; requires Docker Engine on the host. Applies on the
+            next server start.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={useDocker}
+              disabled={!useDocker && !dockerToggleEnabled}
+              onChange={(e) => setUseDocker(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium">Use Docker for servers</span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {!dockerSupported
+                  ? "Not available on this platform (Windows keeps process-based launch)."
+                  : !data?.dockerAvailable
+                    ? "Docker CLI/daemon not available. Install Docker Engine and ensure the daemon is running."
+                    : "CPU affinity and RAM limits are enforced with Docker --cpuset-cpus and --memory / --memory-swap (swap allowance equals the RAM limit)."}
+              </span>
+            </span>
+          </label>
         </CardContent>
       </Card>
 

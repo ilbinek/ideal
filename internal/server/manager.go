@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 )
 
@@ -50,6 +51,8 @@ type runningInstance struct {
 	rptPath        string
 	sessionLog     *sessionLogWriter
 	sessionLogPath string
+	dockerMode     bool
+	containerID    string
 }
 
 // Default is the process-wide server manager.
@@ -67,6 +70,8 @@ func Init() {
 	ReconcileStatuses()
 	ReconcileHeadlessStatuses()
 	Default.adoptOrphans()
+	// Drop unused old generations after adopt so pins for live servers are kept.
+	contentver.GCAllOrphans()
 }
 
 // ReconcileStatuses settles orphaned DB statuses on startup. Servers still bound
@@ -80,28 +85,39 @@ func ReconcileStatuses() {
 		return
 	}
 	for _, s := range servers {
-		alive := ServerAlive(s.PID, s.GamePort)
+		alive := ServerAlive(s.PID, s.GamePort) || dockerContainerRunning(s.ID)
 		switch s.Status {
 		case database.ServerStatusRunning, database.ServerStatusStarting:
 			if !alive {
 				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, 0, s.ActiveRPT)
+				if pins, err := database.ClearServerPins(s.ID); err == nil {
+					contentver.GCReleasedPins(pins)
+				}
 			}
 		case database.ServerStatusStopping:
-			if alive && s.PID > 0 && processRunning(s.PID) {
+			if alive && dockerContainerRunning(s.ID) {
+				_ = stopDockerContainer(s.ID)
+			} else if alive && s.PID > 0 && processRunning(s.PID) {
 				if err := stopProcess(s.PID); err != nil && ServerAlive(s.PID, s.GamePort) {
 					// Kill failed and process still up — unknown so Start/Stop stay usable.
 					_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
 					continue
 				}
 			}
-			if ServerAlive(s.PID, s.GamePort) {
+			if ServerAlive(s.PID, s.GamePort) || dockerContainerRunning(s.ID) {
 				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
 				continue
 			}
 			_ = database.UpdateServerStatus(s.ID, database.ServerStatusStopped, 0, s.ActiveRPT)
+			if pins, err := database.ClearServerPins(s.ID); err == nil {
+				contentver.GCReleasedPins(pins)
+			}
 		case database.ServerStatusUnknown:
 			if !alive {
 				_ = database.UpdateServerStatus(s.ID, database.ServerStatusStopped, 0, s.ActiveRPT)
+				if pins, err := database.ClearServerPins(s.ID); err == nil {
+					contentver.GCReleasedPins(pins)
+				}
 			}
 		}
 	}
@@ -129,32 +145,58 @@ func (m *Manager) adoptOrphans() {
 		if s.Status != database.ServerStatusRunning && s.Status != database.ServerStatusStarting {
 			continue
 		}
-		if s.PID <= 0 || !processRunning(s.PID) {
+
+		var (
+			pid         int
+			proc        *managedProc
+			dockerMode  bool
+			containerID string
+		)
+
+		// Prefer Docker containers when present (Ideal may have restarted with useDocker).
+		if cid, dproc, dpid, derr := adoptDockerContainer(s.ID); derr == nil && dproc != nil {
+			pid = dpid
+			proc = dproc
+			dockerMode = true
+			containerID = cid
+		} else if s.PID > 0 && processRunning(s.PID) {
+			pid = s.PID
+			proc = adoptProcess(s.PID)
+		} else {
 			continue
 		}
+
 		gen := atomic.AddUint64(&nextInstanceGen, 1)
 		m.instances[s.ID] = &runningInstance{
-			serverID:  s.ID,
-			gen:       gen,
-			pid:       s.PID,
-			proc:      adoptProcess(s.PID),
-			startedAt: time.Now(),
-			rptPath:   s.ActiveRPT,
+			serverID:    s.ID,
+			gen:         gen,
+			pid:         pid,
+			proc:        proc,
+			startedAt:   time.Now(),
+			rptPath:     s.ActiveRPT,
+			dockerMode:  dockerMode,
+			containerID: containerID,
 		}
 		adoptedServers = append(adoptedServers, struct {
 			id  int
 			gen uint64
 		}{s.ID, gen})
 		if s.Status != database.ServerStatusRunning {
-			_ = database.UpdateServerStatus(s.ID, database.ServerStatusRunning, s.PID, s.ActiveRPT)
+			_ = database.UpdateServerStatus(s.ID, database.ServerStatusRunning, pid, s.ActiveRPT)
 		}
-		if err := ApplyServerAffinity(s.PID, s.CPUAffinity); err != nil {
-			log.Printf("[SERVER] affinity on adopt pid=%d server=%d: %v", s.PID, s.ID, err)
+		if !dockerMode {
+			if err := ApplyServerAffinity(pid, s.CPUAffinity); err != nil {
+				log.Printf("[SERVER] affinity on adopt pid=%d server=%d: %v", pid, s.ID, err)
+			}
+			if err := ApplyServerMemoryLimit(s.ID, pid, s.MemoryLimitMB); err != nil {
+				log.Printf("[SERVER] memory limit on adopt pid=%d server=%d: %v", pid, s.ID, err)
+			}
 		}
-		if err := ApplyServerMemoryLimit(s.ID, s.PID, s.MemoryLimitMB); err != nil {
-			log.Printf("[SERVER] memory limit on adopt pid=%d server=%d: %v", s.PID, s.ID, err)
+		if dockerMode {
+			log.Printf("[SERVER] adopted docker orphan container=%s pid=%d server=%d (%s)", containerID, pid, s.ID, s.Slug)
+		} else {
+			log.Printf("[SERVER] adopted orphan pid=%d server=%d (%s)", pid, s.ID, s.Slug)
 		}
-		log.Printf("[SERVER] adopted orphan pid=%d server=%d (%s)", s.PID, s.ID, s.Slug)
 	}
 
 	clients, _ := database.GetAllHeadlessClients()
@@ -174,6 +216,12 @@ func (m *Manager) adoptOrphans() {
 		if c.PID <= 0 || !processRunning(c.PID) {
 			continue
 		}
+		parentDocker := false
+		if inst, ok := m.instances[c.ServerID]; ok {
+			parentDocker = inst.dockerMode
+		} else if dockerContainerRunning(c.ServerID) {
+			parentDocker = true
+		}
 		gen := atomic.AddUint64(&nextInstanceGen, 1)
 		m.headless[key] = &runningHeadless{
 			serverID:    c.ServerID,
@@ -184,6 +232,7 @@ func (m *Manager) adoptOrphans() {
 			startedAt:   time.Now(),
 			rptPath:     c.ActiveRPT,
 			profileName: c.ProfileName,
+			dockerMode:  parentDocker,
 		}
 		adoptedHC = append(adoptedHC, struct {
 			serverID int
@@ -193,12 +242,14 @@ func (m *Manager) adoptOrphans() {
 		if c.Status != database.ServerStatusRunning {
 			_ = database.UpdateHeadlessStatus(c.ServerID, c.Slot, database.ServerStatusRunning, c.PID, c.ActiveRPT)
 		}
-		if parent, err := database.GetServer(c.ServerID); err == nil {
-			if err := ApplyServerAffinity(c.PID, parent.CPUAffinity); err != nil {
-				log.Printf("[HC] affinity on adopt pid=%d server=%d slot=%d: %v", c.PID, c.ServerID, c.Slot, err)
-			}
-			if err := ApplyServerMemoryLimit(c.ServerID, c.PID, parent.MemoryLimitMB); err != nil {
-				log.Printf("[HC] memory limit on adopt pid=%d server=%d slot=%d: %v", c.PID, c.ServerID, c.Slot, err)
+		if !parentDocker {
+			if parent, err := database.GetServer(c.ServerID); err == nil {
+				if err := ApplyServerAffinity(c.PID, parent.CPUAffinity); err != nil {
+					log.Printf("[HC] affinity on adopt pid=%d server=%d slot=%d: %v", c.PID, c.ServerID, c.Slot, err)
+				}
+				if err := ApplyServerMemoryLimit(c.ServerID, c.PID, parent.MemoryLimitMB); err != nil {
+					log.Printf("[HC] memory limit on adopt pid=%d server=%d slot=%d: %v", c.PID, c.ServerID, c.Slot, err)
+				}
 			}
 		}
 		log.Printf("[HC] adopted orphan pid=%d server=%d slot=%d", c.PID, c.ServerID, c.Slot)
@@ -350,7 +401,7 @@ func (m *Manager) Start(serverID int) error {
 	if err != nil {
 		return err
 	}
-	if !IsBranchInstalled(branch.InstallPath) {
+	if !BranchIsInstalled(branch) {
 		return fmt.Errorf("branch %q is not installed", branch.Name)
 	}
 
@@ -371,12 +422,22 @@ func (m *Manager) Start(serverID int) error {
 		return err
 	}
 
+	pins, err := contentver.CollectPinsForServer(serverID)
+	if err != nil {
+		return fmt.Errorf("failed to collect content pins: %w", err)
+	}
+	if err := database.ReplaceServerPins(serverID, pins); err != nil {
+		return fmt.Errorf("failed to pin content versions: %w", err)
+	}
+
 	if err := ProvisionServer(serverID); err != nil {
+		_, _ = database.ClearServerPins(serverID)
 		return err
 	}
 
 	launch, err := BuildLaunchArgs(serverID)
 	if err != nil {
+		_, _ = database.ClearServerPins(serverID)
 		return err
 	}
 
@@ -385,6 +446,7 @@ func (m *Manager) Start(serverID int) error {
 
 	startTime := time.Now()
 	if err := os.MkdirAll(filepath.Join(InstanceDir(srv.Slug), "logs"), 0755); err != nil {
+		_, _ = database.ClearServerPins(serverID)
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
 		m.broadcast()
 		return fmt.Errorf("failed to create logs directory: %w", err)
@@ -393,32 +455,62 @@ func (m *Manager) Start(serverID int) error {
 		fmt.Sprintf("session-%s.log", startTime.Format("2006-01-02_150405")))
 	sessionFile, err := os.OpenFile(sessionLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		_, _ = database.ClearServerPins(serverID)
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
 		m.broadcast()
 		return fmt.Errorf("failed to create session log: %w", err)
 	}
 	sessionLog := newSessionLogWriter(sessionFile, 512*1024)
 
-	proc, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
-	if err != nil {
+	useDocker, dockerErr := dockerModeForStart()
+	if dockerErr != nil {
 		_ = sessionLog.Close()
+		_, _ = database.ClearServerPins(serverID)
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
 		m.broadcast()
-		return err
+		return dockerErr
+	}
+	var (
+		proc        *managedProc
+		containerID string
+		startErr    error
+	)
+	if useDocker {
+		extraMounts := CollectDockerExtraMounts(serverID)
+		containerID, proc, startErr = startDockerServer(
+			serverID, launch.Binary, launch.Args, launch.WorkingDir,
+			srv.CPUAffinity, srv.MemoryLimitMB, extraMounts, sessionLog,
+		)
+	} else {
+		proc, startErr = startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
+	}
+	if startErr != nil {
+		_ = sessionLog.Close()
+		_, _ = database.ClearServerPins(serverID)
+		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
+		m.broadcast()
+		return startErr
 	}
 
-	if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
-		log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
-	}
-	if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
-		log.Printf("[SERVER] memory limit warning for %d: %v", serverID, err)
+	if !useDocker {
+		if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
+			log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
+		}
+		if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
+			log.Printf("[SERVER] memory limit warning for %d: %v", serverID, err)
+		}
 	}
 
 	// Confirm the process did not die immediately (e.g. port still held on UDP).
 	if err := verifyProcessStartup(proc, srv.GamePort, 8*time.Second); err != nil {
-		_ = stopProcess(proc.pid)
+		if useDocker {
+			_ = stopDockerContainer(serverID)
+		} else {
+			_ = stopProcess(proc.pid)
+		}
 		_ = proc.wait(5 * time.Second)
 		_ = sessionLog.Close()
+		_, _ = database.ClearServerPins(serverID)
 		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
 		m.broadcast()
 		log.Printf("[SERVER] start failed for %d: %v", serverID, err)
@@ -438,6 +530,8 @@ func (m *Manager) Start(serverID int) error {
 		rptPath:        rptPath,
 		sessionLog:     sessionLog,
 		sessionLogPath: sessionLogPath,
+		dockerMode:     useDocker,
+		containerID:    containerID,
 	}
 	m.mu.Unlock()
 
@@ -546,12 +640,24 @@ func (m *Manager) Stop(serverID int) error {
 		steamPort = srv.SteamPort
 	}
 
-	if err := stopProcess(inst.pid); err != nil {
-		if !inst.proc.exited() && ServerAlive(inst.pid, gamePort) {
+	var stopErr error
+	if inst.dockerMode {
+		stopErr = stopDockerContainer(serverID)
+	} else {
+		stopErr = stopProcess(inst.pid)
+	}
+	if stopErr != nil {
+		stillAlive := false
+		if inst.dockerMode {
+			stillAlive = dockerContainerRunning(serverID)
+		} else {
+			stillAlive = !inst.proc.exited() && ServerAlive(inst.pid, gamePort)
+		}
+		if stillAlive {
 			// Still running — revert so status cannot stay stuck on "stopping".
 			_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, inst.pid, inst.rptPath)
 			m.broadcast()
-			return err
+			return stopErr
 		}
 		// Process already gone; treat as a successful stop.
 	}
@@ -573,6 +679,9 @@ func (m *Manager) Stop(serverID int) error {
 
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, inst.rptPath)
 	ReleaseServerMemoryLimit(serverID)
+	if pins, err := database.ClearServerPins(serverID); err == nil {
+		contentver.GCReleasedPins(pins)
+	}
 	m.broadcast()
 	return nil
 }
@@ -583,7 +692,9 @@ func (m *Manager) stopOrphan(serverID int) error {
 	if err != nil {
 		return err
 	}
-	if srv.PID > 0 && processRunning(srv.PID) {
+	if _, _, running, _ := findDockerContainer(serverID); running || dockerContainerRunning(serverID) {
+		_ = stopDockerContainer(serverID)
+	} else if srv.PID > 0 && processRunning(srv.PID) {
 		if err := stopProcess(srv.PID); err != nil && ServerAlive(srv.PID, srv.GamePort) {
 			return err
 		}
@@ -591,6 +702,9 @@ func (m *Manager) stopOrphan(serverID int) error {
 	_ = waitForPortsFree(srv.GamePort, srv.SteamPort, 15*time.Second)
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, srv.ActiveRPT)
 	ReleaseServerMemoryLimit(serverID)
+	if pins, err := database.ClearServerPins(serverID); err == nil {
+		contentver.GCReleasedPins(pins)
+	}
 	m.broadcast()
 	return nil
 }
@@ -736,6 +850,9 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 	}
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, activeRPT)
 	ReleaseServerMemoryLimit(serverID)
+	if pins, err := database.ClearServerPins(serverID); err == nil {
+		contentver.GCReleasedPins(pins)
+	}
 	m.broadcast()
 }
 

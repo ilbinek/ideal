@@ -7,18 +7,15 @@ package queue
 import (
 	"context"
 	"log"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/steam"
-	"arma3modmanager/internal/utils"
 )
-
-const modsDirectory = "./mods"
 
 // Item status values.
 const (
@@ -37,6 +34,9 @@ type Item struct {
 	Percentage float64 `json:"percentage"`
 	Message    string  `json:"message"`
 	FileName   string  `json:"fileName"`
+
+	// generation is set while downloading into a soft-versioned folder.
+	generation int
 }
 
 // Snapshot is the full, serializable state of the queue at a point in time.
@@ -216,8 +216,17 @@ func (m *Manager) downloadGoSteamBatch(config *database.Config, batch []*Item) {
 	byID := make(map[string]*Item, len(batch))
 	ids := make([]string, 0, len(batch))
 	for _, it := range batch {
+		gen, err := contentver.PrepareModDownload(it.ID, it.WorkshopID)
+		if err != nil {
+			m.setError(it, "Failed to prepare version: "+err.Error())
+			continue
+		}
+		it.generation = gen
 		byID[it.WorkshopID] = it
 		ids = append(ids, it.WorkshopID)
+	}
+	if len(ids) == 0 {
+		return
 	}
 
 	// gosteam calls OnProgress concurrently (one goroutine per in-flight mod).
@@ -230,6 +239,7 @@ func (m *Manager) downloadGoSteamBatch(config *database.Config, batch []*Item) {
 		case "complete":
 			m.finishGoSteamItem(it)
 		case "error":
+			contentver.AbortModDownload(it.ID, it.WorkshopID, it.generation)
 			m.setError(it, u.Message)
 			m.broadcast()
 		default:
@@ -249,7 +259,7 @@ func (m *Manager) downloadGoSteamBatch(config *database.Config, batch []*Item) {
 	}
 
 	cfg := depot.GoSteamConfig{
-		OutputDir:         modsDirectory,
+		OutputDir:         contentver.StagingRoot(),
 		MaxConcurrentMods: config.MaxConcurrentDownloads,
 	}
 	if err := depot.DownloadBatchGoSteam(ctx, sess, store, ids, cfg, onProgress); err != nil {
@@ -260,6 +270,7 @@ func (m *Manager) downloadGoSteamBatch(config *database.Config, batch []*Item) {
 			pending := it.Status == StatusDownloading
 			m.mu.Unlock()
 			if pending {
+				contentver.AbortModDownload(it.ID, it.WorkshopID, it.generation)
 				m.setError(it, "Download failed: "+err.Error())
 			}
 		}
@@ -270,15 +281,12 @@ func (m *Manager) downloadGoSteamBatch(config *database.Config, batch []*Item) {
 // finishGoSteamItem records a completed gosteam download in the DB and refreshes
 // its addons mirror (rebuilt so symlinks for pruned files don't linger).
 func (m *Manager) finishGoSteamItem(it *Item) {
-	modPath := filepath.Join(modsDirectory, it.WorkshopID)
-	if err := database.UpdateModDownloaded(it.ID, true, modPath); err != nil {
-		log.Printf("[QUEUE] failed to update mod status: %v", err)
-	}
-	if err := utils.RemoveModFromAddons(modPath); err != nil {
-		log.Printf("[QUEUE] failed to clear addons mirror: %v", err)
-	}
-	if err := utils.SyncModToAddons(modPath); err != nil {
-		log.Printf("[QUEUE] failed to sync mod to addons: %v", err)
+	if err := contentver.FinalizeModDownload(it.ID, it.WorkshopID, it.generation); err != nil {
+		log.Printf("[QUEUE] failed to finalize mod %s: %v", it.WorkshopID, err)
+		contentver.AbortModDownload(it.ID, it.WorkshopID, it.generation)
+		m.setError(it, "Failed to finalize download: "+err.Error())
+		m.broadcast()
+		return
 	}
 	server.RescanKeysForMod(it.ID)
 
@@ -297,16 +305,22 @@ func (m *Manager) download(item *Item) {
 		return
 	}
 
+	gen, err := contentver.PrepareModDownload(item.ID, item.WorkshopID)
+	if err != nil {
+		m.setError(item, "Failed to prepare version: "+err.Error())
+		return
+	}
+	item.generation = gen
+
 	progressChan := make(chan depot.ProgressUpdate, 100)
-	var modPath string
 	var dlErr error
 	go func() {
-		modPath, dlErr = depot.DownloadWithProgress(depot.Options{
+		_, dlErr = depot.DownloadWithProgress(depot.Options{
 			Downloader:          config.Downloader,
 			WorkshopID:          item.WorkshopID,
 			Username:            config.Username,
 			Password:            config.Password,
-			OutputDir:           modsDirectory,
+			OutputDir:           contentver.StagingRoot(),
 			DepotDownloaderPath: config.DepotDownloaderPath,
 			SteamCmdPath:        config.SteamCmdPath,
 		}, progressChan)
@@ -330,15 +344,16 @@ func (m *Manager) download(item *Item) {
 
 	if dlErr != nil {
 		log.Printf("[QUEUE] download failed for %s: %v", item.Name, dlErr)
+		contentver.AbortModDownload(item.ID, item.WorkshopID, item.generation)
 		m.setError(item, "Download failed: "+dlErr.Error())
 		return
 	}
 
-	if err := database.UpdateModDownloaded(item.ID, true, modPath); err != nil {
-		log.Printf("[QUEUE] failed to update mod status: %v", err)
-	}
-	if err := utils.SyncModToAddons(modPath); err != nil {
-		log.Printf("[QUEUE] failed to sync mod to addons: %v", err)
+	if err := contentver.FinalizeModDownload(item.ID, item.WorkshopID, item.generation); err != nil {
+		log.Printf("[QUEUE] failed to finalize mod %s: %v", item.WorkshopID, err)
+		contentver.AbortModDownload(item.ID, item.WorkshopID, item.generation)
+		m.setError(item, "Failed to finalize download: "+err.Error())
+		return
 	}
 	server.RescanKeysForMod(item.ID)
 

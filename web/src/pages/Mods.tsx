@@ -685,7 +685,7 @@ export function Mods() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Mods"
-        description="Download, update and manage Workshop mods. Mods are shared across servers — stop servers that use a mod before updating it."
+        description="Download, update and manage Workshop mods. Soft versioning keeps running servers on their current mod files; new starts use the latest download."
         actions={
           <div className="w-56">
             <Select value={modsetParam ?? ""} onChange={(e) => setModsetFilter(e.target.value)}>

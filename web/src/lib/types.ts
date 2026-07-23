@@ -27,6 +27,9 @@ export interface Settings {
   maxConcurrentDownloads: number;
   updateCheckIntervalMinutes: number;
   discordWebhookUrl: string;
+  useDocker: boolean;
+  platform: string;
+  dockerAvailable: boolean;
 }
 
 export type SteamLoginPhase =

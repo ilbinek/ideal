@@ -16,6 +16,7 @@ The frontend was built quickly for functionality over polish. Contributions that
 
 - **Branches** — install Arma 3 dedicated server builds (built-in gosteam by default, or SteamCMD)
 - **Servers** — create instances, assign mods, edit config/profiles, upload missions, start/stop/restart, live logs
+- **Docker isolation (Linux)** — optional global setting to run each server in a local Docker container with host networking and Docker-enforced CPU/RAM limits
 - **Mods** — download from Steam Workshop (built-in gosteam, DepotDownloader, or SteamCMD), update checks, download queue
 - **Modsets** — import Arma 3 Launcher HTML presets
 - **A3Sync** — generate a symlink-based repository from downloaded mods
@@ -94,6 +95,27 @@ For DepotDownloader / SteamCMD mod downloads, Steam username and password are st
 
 A Steam Web API key (Settings) is used for update checks.
 
+### Docker isolation (Linux only)
+
+Optional. In **Settings → Server isolation**, enable **Use Docker for servers**. Ideal must be able to reach a local Docker Engine (`docker` on `PATH`, daemon running).
+
+When enabled, each dedicated server starts as container `ideal-server-<id>` with:
+
+- **Host networking** (game/Steam ports and headless `127.0.0.1` unchanged)
+- **Bind-mount** of the Ideal data root at the same absolute path (so instance symlinks resolve); custom mod folders outside the data root are mounted read-only as needed
+- **CPU affinity** via `--cpuset-cpus`
+- **RAM limit** via `--memory=Nm` and `--memory-swap=2Nm` (allows swap equal to the RAM cap)
+
+Headless clients run inside the same container (`docker exec`) so they share that memory/CPU budget. Windows installs keep process-based launch (Job Objects / affinity) and ignore this setting.
+
+On first use Ideal builds the `ideal-arma-runtime:local` image from the embedded Dockerfile (same as `docker/arma-runtime/Dockerfile`). You can also build it manually:
+
+```bash
+docker build -t ideal-arma-runtime:local docker/arma-runtime
+```
+
+The mode applies on the **next** server start (running processes/containers are not migrated mid-flight).
+
 ---
 
 ## Installation (release)
@@ -160,7 +182,7 @@ Steam credentials, downloader choice, and related options live in the SQLite dat
 
 1. Open **Servers** → create a server (pick a branch, ports, optional modset)
 2. On the server detail page, assign client/server mods, edit config, upload missions as needed
-3. Click **Start** — Ideal provisions the instance (`servers/<slug>/`), copies keys, and launches the process
+3. Click **Start** — Ideal provisions the instance (`servers/<slug>/`), copies keys, and launches the process (or a Docker container when Server isolation is enabled on Linux)
 4. Use **Stop** / **Restart** from the UI; live status updates over SSE
 5. **Logs** tab tails session output and RPT files
 
@@ -208,6 +230,7 @@ Point your A3Sync repository at that directory.
 ├── a3sync/               # Generated A3Sync repository
 ├── arma3/branches/       # Installed dedicated server branches
 ├── servers/<slug>/       # Per-server instances (configs, mods, logs, missions)
+├── docker/arma-runtime/  # Dockerfile for the Linux Arma runtime image
 ├── web/                  # React SPA source
 ├── web/dist/             # Built SPA (embedded via go:embed; not committed)
 ├── screenshots/          # UI screenshots for this README

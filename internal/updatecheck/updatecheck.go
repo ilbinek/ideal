@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/discordhook"
@@ -85,7 +86,11 @@ func CheckBranches(branches []database.ArmaBranch) (map[int]string, error) {
 
 		localBuild := b.BuildID
 		if localBuild == "" {
-			if discovered := depot.ReadInstalledBuildID(b.InstallPath); discovered != "" {
+			dir, _, err := contentver.CurrentBranchContentDir(b.ID, b.InstallPath)
+			if err != nil || dir == "" {
+				dir = b.InstallPath
+			}
+			if discovered := depot.ReadInstalledBuildID(dir); discovered != "" {
 				localBuild = discovered
 				_ = database.SetBranchInstalled(b.ID, true, discovered)
 				b.BuildID = discovered

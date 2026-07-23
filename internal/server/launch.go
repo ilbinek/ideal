@@ -32,7 +32,11 @@ func BuildLaunchArgs(serverID int) (*LaunchArgs, error) {
 	}
 
 	instanceDir := InstanceDir(srv.Slug)
-	binaryRel, ok := ResolveServerBinary(branch.InstallPath, srv.ServerBinary)
+	contentDir, err := BranchContentDirForServer(serverID, branch)
+	if err != nil {
+		return nil, err
+	}
+	binaryRel, ok := ResolveServerBinary(contentDir, srv.ServerBinary)
 	if !ok {
 		if strings.TrimSpace(srv.ServerBinary) != "" {
 			return nil, fmt.Errorf("server binary %q not found in branch %q", srv.ServerBinary, branch.Name)
@@ -92,7 +96,11 @@ func BuildHeadlessLaunchArgs(serverID, slot int) (*LaunchArgs, error) {
 	}
 
 	instanceDir := InstanceDir(srv.Slug)
-	binaryRel, ok := ResolveServerBinary(branch.InstallPath, srv.ServerBinary)
+	contentDir, err := BranchContentDirForServer(serverID, branch)
+	if err != nil {
+		return nil, err
+	}
+	binaryRel, ok := ResolveServerBinary(contentDir, srv.ServerBinary)
 	if !ok {
 		if strings.TrimSpace(srv.ServerBinary) != "" {
 			return nil, fmt.Errorf("server binary %q not found in branch %q", srv.ServerBinary, branch.Name)
@@ -163,7 +171,9 @@ func buildModParams(instanceDir string, serverID int, slug string) (modParam, se
 
 	fallbackGameDir := ""
 	if branch, err := database.GetBranch(srv.BranchID); err == nil {
-		fallbackGameDir = BranchGameDir(branch.InstallPath)
+		if contentDir, err := BranchContentDirForServer(serverID, branch); err == nil {
+			fallbackGameDir = BranchGameDir(contentDir)
+		}
 	}
 	for _, code := range FilterResolvableCdlcs(srv.EnabledCdlcs, fallbackGameDir) {
 		clientMods = append(clientMods, code)
@@ -173,7 +183,7 @@ func buildModParams(instanceDir string, serverID int, slug string) (modParam, se
 		if !sm.Enabled {
 			continue
 		}
-		linkName, _, ok := ModLinkName(slug, sm)
+		linkName, _, ok := ModLinkNameForServer(serverID, slug, sm)
 		if !ok {
 			continue
 		}

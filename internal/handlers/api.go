@@ -9,14 +9,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
 	"arma3modmanager/internal/auth"
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/parser"
 	"arma3modmanager/internal/queue"
+	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/updatecheck"
 	"arma3modmanager/internal/utils"
 	"arma3modmanager/internal/workshop"
@@ -104,6 +107,9 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		"maxConcurrentDownloads":     4,
 		"updateCheckIntervalMinutes": 0,
 		"discordWebhookUrl":          "",
+		"useDocker":                  false,
+		"platform":                   runtime.GOOS,
+		"dockerAvailable":            server.DockerAvailable(),
 	}
 	if config != nil {
 		resp["username"] = config.Username
@@ -119,6 +125,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["updateCheckIntervalMinutes"] = config.UpdateCheckIntervalMinutes
 		resp["discordWebhookUrl"] = config.DiscordWebhookURL
+		resp["useDocker"] = config.UseDocker
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -134,10 +141,23 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 		MaxConcurrentDownloads     int    `json:"maxConcurrentDownloads"`
 		UpdateCheckIntervalMinutes int    `json:"updateCheckIntervalMinutes"`
 		DiscordWebhookURL          string `json:"discordWebhookUrl"`
+		UseDocker                  bool   `json:"useDocker"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+
+	if body.UseDocker && runtime.GOOS != "linux" {
+		writeError(w, http.StatusBadRequest, "Docker isolation is only supported on Linux")
+		return
+	}
+	if body.UseDocker && !server.DockerAvailable() {
+		existing, _ := database.GetConfig()
+		if existing == nil || !existing.UseDocker {
+			writeError(w, http.StatusBadRequest, "Docker is not available (is the docker CLI installed and the daemon running?)")
+			return
+		}
 	}
 
 	// An empty password means "keep the existing one".
@@ -158,11 +178,17 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := database.SaveConfig(
 		body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath,
-		body.MaxConcurrentDownloads, body.UpdateCheckIntervalMinutes, body.DiscordWebhookURL,
+		body.MaxConcurrentDownloads, body.UpdateCheckIntervalMinutes, body.DiscordWebhookURL, body.UseDocker,
 	); err != nil {
 		log.Printf("Error saving config: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to save settings")
 		return
+	}
+	if body.UseDocker {
+		if err := server.EnsureDockerRuntimeImage(); err != nil {
+			log.Printf("[DOCKER] ensure runtime image: %v", err)
+			// Setting is saved; start will fail clearly if image is still missing.
+		}
 	}
 	updatecheck.Default.Reload()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -379,7 +405,11 @@ func deleteModFilesAndRecord(id int) error {
 		return err
 	}
 
-	if mod.LocalPath != "" {
+	if mod.WorkshopID != "" {
+		if err := contentver.RemoveAllModContent(id, mod.WorkshopID); err != nil {
+			log.Printf("[ERROR] Failed to remove mod generations: %v", err)
+		}
+	} else if mod.LocalPath != "" {
 		if err := utils.RemoveModFromAddons(mod.LocalPath); err != nil {
 			log.Printf("[ERROR] Failed to remove mod from addons: %v", err)
 		}
@@ -614,12 +644,17 @@ func GenerateA3SyncAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 	var modsForSync []struct{ LocalPath, Name string }
 	for _, mod := range allMods {
-		if mod.Downloaded && mod.LocalPath != "" {
-			modsForSync = append(modsForSync, struct{ LocalPath, Name string }{
-				LocalPath: mod.LocalPath,
-				Name:      mod.Name,
-			})
+		if !mod.Downloaded || mod.WorkshopID == "" {
+			continue
 		}
+		content, _, err := contentver.CurrentModContentDir(mod.ID, mod.WorkshopID)
+		if err != nil || content == "" {
+			continue
+		}
+		modsForSync = append(modsForSync, struct{ LocalPath, Name string }{
+			LocalPath: content,
+			Name:      mod.Name,
+		})
 	}
 
 	if err := utils.GenerateA3SyncFolder(modsForSync); err != nil {
@@ -646,9 +681,14 @@ func StartupCommandAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 	var modPaths []string
 	for _, mod := range mods {
-		if mod.Downloaded && mod.LocalPath != "" {
-			modPaths = append(modPaths, mod.LocalPath)
+		if !mod.Downloaded || mod.WorkshopID == "" {
+			continue
 		}
+		content, _, err := contentver.CurrentModContentDir(mod.ID, mod.WorkshopID)
+		if err != nil || content == "" {
+			continue
+		}
+		modPaths = append(modPaths, content)
 	}
 
 	if err := utils.ExtractKeys(modPaths, KeysDirectory); err != nil {

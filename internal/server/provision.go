@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/utils"
 )
@@ -23,11 +24,15 @@ func ProvisionServer(serverID int) error {
 		return err
 	}
 
-	if !IsBranchInstalled(branch.InstallPath) {
+	contentDir, err := BranchContentDirForServer(serverID, branch)
+	if err != nil {
+		return err
+	}
+	if !IsBranchInstalled(contentDir) {
 		return fmt.Errorf("branch %q is not installed", branch.Name)
 	}
 	// Fix missing +x from Steam depot downloads (common on Linux).
-	utils.EnsureDedicatedServerBinariesExecutable(branch.InstallPath)
+	utils.EnsureDedicatedServerBinariesExecutable(contentDir)
 
 	instanceDir := InstanceDir(srv.Slug)
 	if err := os.MkdirAll(instanceDir, 0755); err != nil {
@@ -63,7 +68,7 @@ func ProvisionServer(serverID int) error {
 	}
 
 	// Symlink branch game files into instance (from steamapps/common/... when applicable)
-	gameDir := BranchGameDir(branch.InstallPath)
+	gameDir := BranchGameDir(contentDir)
 	entries, err := os.ReadDir(gameDir)
 	if err != nil {
 		return fmt.Errorf("failed to read branch install at %s: %w", gameDir, err)
@@ -137,7 +142,7 @@ func provisionMods(instanceDir string, serverID int) error {
 		if !sm.Enabled {
 			continue
 		}
-		linkName, srcPath, ok := ModLinkName(srv.Slug, sm)
+		linkName, srcPath, ok := ModLinkNameForServer(serverID, srv.Slug, sm)
 		if !ok {
 			if sm.ModID != nil {
 				log.Printf("[PROVISION] skipping mod %d: not downloaded", *sm.ModID)
@@ -185,7 +190,11 @@ func provisionKeys(instanceDir string, serverID int) error {
 	if err != nil {
 		return err
 	}
-	branchKeysDir := filepath.Join(BranchGameDir(branch.InstallPath), "keys")
+	contentDir, err := BranchContentDirForServer(serverID, branch)
+	if err != nil {
+		return err
+	}
+	branchKeysDir := filepath.Join(BranchGameDir(contentDir), "keys")
 	if err := utils.CopyBikeysFromDir(branchKeysDir, keysDir); err != nil {
 		log.Printf("[PROVISION] warning: failed to copy branch keys from %s: %v", branchKeysDir, err)
 	}
@@ -197,7 +206,7 @@ func provisionKeys(instanceDir string, serverID int) error {
 				log.Printf("[PROVISION] warning: failed to copy Creator DLC keys from %s: %v", cdlcKeys, err)
 			}
 		}
-		fallbackGameDir := BranchGameDir(branch.InstallPath)
+		fallbackGameDir := BranchGameDir(contentDir)
 		var cdlcPaths []string
 		for _, code := range srv.EnabledCdlcs {
 			if src, ok := ResolveCdlcPath(code, fallbackGameDir); ok {
@@ -224,11 +233,15 @@ func provisionKeys(instanceDir string, serverID int) error {
 		if sm.ModID != nil {
 			mod, err := database.GetMod(*sm.ModID)
 			if err == nil && mod.Downloaded && mod.LocalPath != "" {
-				addonsPath := utils.AddonsModPath(mod.LocalPath)
-				if _, err := os.Stat(addonsPath); err == nil {
-					modPaths = append(modPaths, addonsPath)
-				} else {
-					modPaths = append(modPaths, mod.LocalPath)
+				addonsPath := resolveModAddonsForServer(serverID, mod)
+				if addonsPath != "" {
+					if _, err := os.Stat(addonsPath); err == nil {
+						modPaths = append(modPaths, addonsPath)
+						continue
+					}
+				}
+				if content, _, err := contentver.CurrentModContentDir(mod.ID, mod.WorkshopID); err == nil && content != "" {
+					modPaths = append(modPaths, content)
 				}
 			}
 		} else if sm.CustomPath != "" {

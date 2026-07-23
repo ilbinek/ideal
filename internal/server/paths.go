@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/utils"
 )
@@ -128,6 +129,11 @@ func SanitizeModLabel(label string) string {
 // Managed mods symlink from the lowercased addons mirror, not the raw mods download folder.
 // Custom/local path mods symlink from servers/<slug>/localmods/<name>/.
 func ModLinkName(slug string, sm database.ServerMod) (linkName, srcPath string, ok bool) {
+	return ModLinkNameForServer(0, slug, sm)
+}
+
+// ModLinkNameForServer is like ModLinkName but respects content pins when serverID > 0.
+func ModLinkNameForServer(serverID int, slug string, sm database.ServerMod) (linkName, srcPath string, ok bool) {
 	if !sm.Enabled {
 		return "", "", false
 	}
@@ -140,11 +146,12 @@ func ModLinkName(slug string, sm database.ServerMod) (linkName, srcPath string, 
 		if linkName == "" {
 			linkName = strings.ToLower(filepath.Base(mod.LocalPath))
 		}
-		srcPath = utils.AddonsModPath(mod.LocalPath)
+		srcPath = resolveModAddonsForServer(serverID, mod)
+		if srcPath == "" {
+			return "", "", false
+		}
 		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-			if syncErr := utils.SyncModToAddons(mod.LocalPath); syncErr != nil {
-				return "", "", false
-			}
+			return "", "", false
 		}
 		return linkName, srcPath, true
 	}
@@ -161,6 +168,37 @@ func ModLinkName(slug string, sm database.ServerMod) (linkName, srcPath string, 
 		return linkName, srcPath, true
 	}
 	return "", "", false
+}
+
+// resolveModAddonsForServer returns the addons mirror path for a mod generation
+// (pinned if the server has a pin, otherwise current).
+func resolveModAddonsForServer(serverID int, mod *database.Mod) string {
+	if err := contentver.EnsureModMigrated(mod.ID, mod.WorkshopID); err != nil {
+		log.Printf("[SERVER] migrate mod %d: %v", mod.ID, err)
+	}
+	gen := 0
+	if serverID > 0 {
+		if pin, err := database.GetServerPin(serverID, database.ContentKindMod, mod.ID); err == nil && pin != nil {
+			gen = pin.Generation
+		}
+	}
+	if gen == 0 {
+		cur, err := database.GetCurrentModGeneration(mod.ID)
+		if err != nil || cur == nil {
+			// Legacy flat addons path fallback.
+			return utils.AddonsModPath(mod.LocalPath)
+		}
+		gen = cur.Generation
+	}
+	addons := contentver.AddonsGenerationDir(mod.WorkshopID, gen)
+	if _, err := os.Stat(addons); os.IsNotExist(err) {
+		content := contentver.ModGenerationDir(mod.WorkshopID, gen)
+		if syncErr := utils.SyncModMirror(content, addons); syncErr != nil {
+			log.Printf("[SERVER] sync addons for mod %s gen %d: %v", mod.WorkshopID, gen, syncErr)
+			return ""
+		}
+	}
+	return addons
 }
 
 // DefaultServerCfg returns a minimal server.cfg template.

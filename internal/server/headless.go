@@ -42,6 +42,7 @@ type runningHeadless struct {
 	profileName    string
 	sessionLog     *sessionLogWriter
 	sessionLogPath string
+	dockerMode     bool
 }
 
 func (m *Manager) ensureHCMap() {
@@ -220,23 +221,50 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 	}
 	sessionLog := newSessionLogWriter(sessionFile, 512*1024)
 
-	proc, err := startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
-	if err != nil {
+	m.mu.Lock()
+	parent, parentOK := m.instances[serverID]
+	parentDocker := parentOK && parent.dockerMode
+	m.mu.Unlock()
+	if !parentOK {
+		// Dedicated may be orphan-adopted only in DB; detect docker container.
+		parentDocker = dockerContainerRunning(serverID)
+	}
+
+	var (
+		proc     *managedProc
+		startErr error
+		pid      int
+	)
+	if parentDocker {
+		pid, proc, startErr = execDockerHeadless(serverID, launch.Binary, launch.Args, launch.WorkingDir, sessionLogPath, sessionLog)
+	} else {
+		proc, startErr = startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
+		if proc != nil {
+			pid = proc.pid
+		}
+	}
+	if startErr != nil {
 		_ = sessionLog.Close()
 		_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusStopped, 0, "")
 		m.broadcast()
-		return err
+		return startErr
 	}
 
-	if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
-		log.Printf("[HC] affinity warning for server %d slot %d: %v", serverID, slot, err)
-	}
-	if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
-		log.Printf("[HC] memory limit warning for server %d slot %d: %v", serverID, slot, err)
+	if !parentDocker {
+		if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
+			log.Printf("[HC] affinity warning for server %d slot %d: %v", serverID, slot, err)
+		}
+		if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
+			log.Printf("[HC] memory limit warning for server %d slot %d: %v", serverID, slot, err)
+		}
 	}
 
 	if err := verifyHeadlessStartup(proc, 5*time.Second); err != nil {
-		_ = stopProcess(proc.pid)
+		if parentDocker {
+			_ = stopDockerHeadless(serverID, pid)
+		} else {
+			_ = stopProcess(proc.pid)
+		}
 		_ = proc.wait(5 * time.Second)
 		_ = sessionLog.Close()
 		_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusStopped, 0, "")
@@ -254,17 +282,18 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 		serverID:       serverID,
 		slot:           slot,
 		gen:            gen,
-		pid:            proc.pid,
+		pid:            pid,
 		proc:           proc,
 		startedAt:      startTime,
 		rptPath:        rptPath,
 		profileName:    hc.ProfileName,
 		sessionLog:     sessionLog,
 		sessionLogPath: sessionLogPath,
+		dockerMode:     parentDocker,
 	}
 	m.mu.Unlock()
 
-	_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusRunning, proc.pid, rptPath)
+	_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusRunning, pid, rptPath)
 	m.broadcast()
 
 	go m.watchHeadless(serverID, slot, gen)
@@ -323,11 +352,23 @@ func (m *Manager) StopHeadless(serverID, slot int) error {
 	_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusStopping, inst.pid, inst.rptPath)
 	m.broadcast()
 
-	if err := stopProcess(inst.pid); err != nil {
-		if !inst.proc.exited() && processRunning(inst.pid) {
+	var stopErr error
+	if inst.dockerMode {
+		stopErr = stopDockerHeadless(serverID, inst.pid)
+	} else {
+		stopErr = stopProcess(inst.pid)
+	}
+	if stopErr != nil {
+		stillAlive := false
+		if inst.dockerMode {
+			stillAlive = !inst.proc.exited() && (processRunning(inst.pid) || dockerExecStillAlive(serverID, inst.pid))
+		} else {
+			stillAlive = !inst.proc.exited() && processRunning(inst.pid)
+		}
+		if stillAlive {
 			_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusRunning, inst.pid, inst.rptPath)
 			m.broadcast()
-			return err
+			return stopErr
 		}
 	}
 
@@ -350,9 +391,13 @@ func (m *Manager) stopHeadlessOrphan(serverID, slot int) error {
 	if err != nil {
 		return err
 	}
-	if hc.PID > 0 && processRunning(hc.PID) {
-		if err := stopProcess(hc.PID); err != nil && processRunning(hc.PID) {
-			return err
+	if hc.PID > 0 {
+		if dockerContainerRunning(serverID) {
+			_ = stopDockerHeadless(serverID, hc.PID)
+		} else if processRunning(hc.PID) {
+			if err := stopProcess(hc.PID); err != nil && processRunning(hc.PID) {
+				return err
+			}
 		}
 	}
 	_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusStopped, 0, hc.ActiveRPT)

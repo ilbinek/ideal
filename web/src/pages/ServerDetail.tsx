@@ -561,8 +561,8 @@ function OverviewTab({
               ))}
             </select>
             <p className="text-xs text-muted-foreground">
-              Branch files are shared by all servers on this branch. Stop every server using a branch
-              before updating it.
+              Branch files are versioned: running servers keep their pinned generation; new starts use
+              the latest install.
             </p>
           </div>
           <div className="flex flex-col gap-1">

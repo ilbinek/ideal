@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"arma3modmanager/internal/auth"
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/utils"
@@ -31,7 +32,7 @@ func GetBranchesHandler(w http.ResponseWriter, r *http.Request) {
 		branches = []database.ArmaBranch{}
 	}
 	for i := range branches {
-		installed := server.IsBranchInstalled(branches[i].InstallPath)
+		installed := server.BranchIsInstalled(&branches[i])
 		branches[i].Installed = installed
 		if installed {
 			_ = database.SetBranchInstalled(branches[i].ID, true, "")
@@ -86,6 +87,7 @@ func DeleteBranchHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete branch")
 		return
 	}
+	_ = contentver.RemoveAllBranchContent(id)
 	if err := os.RemoveAll(branch.InstallPath); err != nil {
 		log.Printf("[BRANCH] failed to remove install dir %s: %v", branch.InstallPath, err)
 	}
@@ -116,12 +118,17 @@ func ListBranchBinariesHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "branch not found")
 		return
 	}
-	bins := server.ListServerBinaries(branch.InstallPath)
+	contentDir, err := server.ResolveBranchContentDir(branch)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve branch path")
+		return
+	}
+	bins := server.ListServerBinaries(contentDir)
 	if bins == nil {
 		bins = []string{}
 	}
 	preferred := ""
-	if rel, ok := server.FindServerBinary(branch.InstallPath); ok {
+	if rel, ok := server.FindServerBinary(contentDir); ok {
 		preferred = filepath.Base(filepath.FromSlash(rel))
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{

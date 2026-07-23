@@ -645,7 +645,11 @@ func ServerKeysPreview(serverID int) (base, modKeys []string, custom []database.
 	branchKeySet := make(map[string]bool)
 	branch, err := database.GetBranch(srv.BranchID)
 	if err == nil {
-		branchKeysDir := filepath.Join(BranchGameDir(branch.InstallPath), "keys")
+		contentDir, resolveErr := BranchContentDirForServer(srv.ID, branch)
+		if resolveErr != nil {
+			contentDir = branch.InstallPath
+		}
+		branchKeysDir := filepath.Join(BranchGameDir(contentDir), "keys")
 		entries, readErr := os.ReadDir(branchKeysDir)
 		if readErr == nil {
 			for _, e := range entries {

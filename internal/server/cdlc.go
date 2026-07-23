@@ -59,10 +59,14 @@ func CreatorDlcGameDir() string {
 	if err != nil || b == nil {
 		return ""
 	}
-	if !IsBranchInstalled(b.InstallPath) {
+	if !BranchIsInstalled(b) {
 		return ""
 	}
-	return BranchGameDir(b.InstallPath)
+	dir, err := ResolveBranchContentDir(b)
+	if err != nil {
+		return ""
+	}
+	return BranchGameDir(dir)
 }
 
 // ListAvailableCdlcs scans the Creator DLC install for known and discovered packs.
@@ -185,5 +189,5 @@ func CreatorDlcBranchInstalled() bool {
 		}
 		return false
 	}
-	return IsBranchInstalled(b.InstallPath)
+	return BranchIsInstalled(b)
 }

@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sync"
 
+	"arma3modmanager/internal/contentver"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/steam"
@@ -138,29 +138,32 @@ func (b *BranchInstaller) runInstall(branchID int) {
 		return
 	}
 
-	if err := os.MkdirAll(branch.InstallPath, 0755); err != nil {
-		b.setError(fmt.Sprintf("failed to create install dir: %v", err))
+	installDir, generation, err := contentver.PrepareBranchInstall(branchID, branch.InstallPath)
+	if err != nil {
+		b.setError(fmt.Sprintf("failed to prepare branch version: %v", err))
 		return
 	}
-	installDir, err := filepath.Abs(branch.InstallPath)
+	installDirAbs, err := filepath.Abs(installDir)
 	if err != nil {
-		installDir = branch.InstallPath
+		installDirAbs = installDir
 	}
 	backend := config.Downloader
 	if backend == "" {
 		backend = depot.DownloaderGoSteam
 	}
-	log.Printf("[BRANCH] installing branch %q (steam beta %q) via %s to %s", branch.Name, branch.SteamBranch, backend, installDir)
+	log.Printf("[BRANCH] installing branch %q (steam beta %q) via %s to %s (gen %d)",
+		branch.Name, branch.SteamBranch, backend, installDirAbs, generation)
 
 	// Update of an existing install: force full CDN manifest re-check (gosteam VerifyAll;
 	// SteamCMD already always uses "validate").
-	verifyAll := branch.Installed || IsBranchInstalled(branch.InstallPath)
+	cur, _ := database.GetCurrentBranchGeneration(branchID)
+	verifyAll := branch.Installed || (cur != nil && IsBranchGenInstalled(branch.InstallPath, cur.Generation))
 	if verifyAll {
 		b.mu.Lock()
 		b.message = "Verifying and updating..."
 		b.mu.Unlock()
 		b.broadcast()
-		log.Printf("[BRANCH] verify-all enabled for existing install at %s", installDir)
+		log.Printf("[BRANCH] verify-all enabled for existing install at %s", installDirAbs)
 	}
 
 	progressChan := make(chan depot.ProgressUpdate, 100)
@@ -181,7 +184,7 @@ func (b *BranchInstaller) runInstall(branchID int) {
 			installDone <- depot.AppUpdateGoSteam(ctx, sess, steam.Default.Store(), depot.AppUpdateGoSteamOptions{
 				AppID:       depot.DedicatedServerAppIDNum,
 				SteamBranch: branch.SteamBranch,
-				InstallDir:  installDir,
+				InstallDir:  installDirAbs,
 				VerifyAll:   verifyAll,
 			}, progressChan)
 			return
@@ -189,7 +192,7 @@ func (b *BranchInstaller) runInstall(branchID int) {
 		installDone <- depot.AppUpdate(depot.AppUpdateOptions{
 			AppID:        depot.DedicatedServerAppID,
 			SteamBranch:  branch.SteamBranch,
-			InstallDir:   installDir,
+			InstallDir:   installDirAbs,
 			Username:     config.Username,
 			Password:     config.Password,
 			SteamCmdPath: config.SteamCmdPath,
@@ -213,14 +216,16 @@ func (b *BranchInstaller) runInstall(branchID int) {
 
 	installErr := <-installDone
 	if installErr != nil {
+		contentver.AbortBranchInstall(branchID, branch.InstallPath, generation)
 		// Prefer the real download/update failure even if an older server binary
 		// is still on disk (e.g. CDN HTTP 503 mid-update).
 		b.setError(installErr.Error())
 		return
 	}
 
-	if !IsBranchInstalled(branch.InstallPath) {
-		abs, _ := filepath.Abs(branch.InstallPath)
+	if !IsBranchInstalled(installDir) {
+		contentver.AbortBranchInstall(branchID, branch.InstallPath, generation)
+		abs, _ := filepath.Abs(installDir)
 		b.setError(fmt.Sprintf("install finished but server binary not found in %s", abs))
 		if !useGoSteam {
 			if alt := depot.FindSteamCmdDedicatedServerDir(config.SteamCmdPath); alt != "" {
@@ -230,11 +235,14 @@ func (b *BranchInstaller) runInstall(branchID int) {
 		return
 	}
 
-	gameDir := BranchGameDir(branch.InstallPath)
+	gameDir := BranchGameDir(installDir)
 	log.Printf("[BRANCH] install complete — game files at %s", gameDir)
-	utils.EnsureDedicatedServerBinariesExecutable(branch.InstallPath)
-	if err := database.SetBranchInstalled(branchID, true, depot.ReadInstalledBuildID(branch.InstallPath)); err != nil {
-		log.Printf("[BRANCH] failed to update branch status: %v", err)
+	utils.EnsureDedicatedServerBinariesExecutable(installDir)
+	buildID := depot.ReadInstalledBuildID(installDir)
+	if err := contentver.FinalizeBranchInstall(branchID, branch.InstallPath, generation, buildID); err != nil {
+		log.Printf("[BRANCH] failed to finalize branch status: %v", err)
+		b.setError(fmt.Sprintf("install finished but failed to record version: %v", err))
+		return
 	}
 	b.mu.Lock()
 	b.message = "Install complete"
@@ -252,7 +260,51 @@ func (b *BranchInstaller) setError(msg string) {
 	b.broadcast()
 }
 
-// IsBranchInstalled checks if the branch has an arma3server binary.
+// IsBranchGenInstalled reports whether a specific branch generation has a server binary.
+func IsBranchGenInstalled(installPath string, generation int) bool {
+	return IsBranchInstalled(contentver.BranchGenerationDir(installPath, generation))
+}
+
+// BranchContentDirForServer returns the branch content directory to use for a server:
+// pinned generation when running, otherwise current.
+func BranchContentDirForServer(serverID int, branch *database.ArmaBranch) (string, error) {
+	if pin, err := database.GetServerPin(serverID, database.ContentKindBranch, branch.ID); err == nil && pin != nil {
+		dir := contentver.BranchGenerationDir(branch.InstallPath, pin.Generation)
+		if IsBranchInstalled(dir) {
+			return dir, nil
+		}
+	}
+	return ResolveBranchContentDir(branch)
+}
+
+// ResolveBranchContentDir returns the on-disk content directory for a branch
+// (current generation after migration).
+func ResolveBranchContentDir(branch *database.ArmaBranch) (string, error) {
+	dir, gen, err := contentver.CurrentBranchContentDir(branch.ID, branch.InstallPath)
+	if err != nil {
+		return "", err
+	}
+	if gen == 0 {
+		// Not yet versioned / empty — use root (legacy flat or fresh).
+		return contentver.BranchRoot(branch.InstallPath), nil
+	}
+	return dir, nil
+}
+
+// BranchIsInstalled reports whether the branch's current generation has a server binary.
+func BranchIsInstalled(branch *database.ArmaBranch) bool {
+	dir, err := ResolveBranchContentDir(branch)
+	if err != nil {
+		return false
+	}
+	if IsBranchInstalled(dir) {
+		return true
+	}
+	// Pre-migration flat layout still under install root.
+	return IsBranchInstalled(contentver.BranchRoot(branch.InstallPath))
+}
+
+// IsBranchInstalled checks if the path has an arma3server binary.
 func IsBranchInstalled(installPath string) bool {
 	_, ok := FindServerBinary(installPath)
 	return ok
