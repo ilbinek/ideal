@@ -1692,6 +1692,13 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
     }
   }, [archivedMeta, loadingMore, serverId, viewed]);
 
+  // When stopped, auto-open the newest historic log so the viewer isn't blank.
+  useEffect(() => {
+    if (isRunning || viewed || !logs.data?.length) return;
+    const newest = logs.data[0]?.name;
+    if (newest) void loadArchived(newest);
+  }, [isRunning, logs.data, viewed, loadArchived]);
+
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteServerLog(serverId, name),
     onSuccess: (_data, name) => {

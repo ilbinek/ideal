@@ -173,21 +173,17 @@ func startDockerServer(serverID int, binary string, args []string, workDir, sess
 		return "", nil, fmt.Errorf("resolve session log: %w", err)
 	}
 
-	// Redirect stdout/stderr into the bind-mounted session log so historic files
-	// survive docker rm (unlike `docker logs`, which disappears with the container).
-	shellCmd := fmt.Sprintf(
-		"exec %s %s >> %s 2>&1",
-		shellQuote(binAbs),
-		shellJoinArgs(args),
-		shellQuote(logAbs),
-	)
-
+	// Run the binary as PID 1 so Docker captures stdout/stderr. On Linux, Arma's
+	// "RPT" is printed to stdout — shell redirects would hide it from `docker logs`
+	// and are easy to get wrong with quoting. We persist via docker logs → file.
+	homeDir := filepath.Join(workDirAbs, "profiles")
 	runArgs := []string{
 		"run", "-d",
 		"--name", name,
 		"--label", dockerLabelManaged,
 		"--label", fmt.Sprintf("%s=%d", dockerLabelServer, serverID),
 		"--network", "host",
+		"-e", "HOME=" + homeDir,
 		"-v", dataRoot + ":" + dataRoot + ":rw",
 		"-w", workDirAbs,
 	}
@@ -203,7 +199,8 @@ func startDockerServer(serverID int, binary string, args []string, workDir, sess
 			"--memory-swap", fmt.Sprintf("%dm", memoryLimitMB*2),
 		)
 	}
-	runArgs = append(runArgs, dockerRuntimeImage, "sh", "-c", shellCmd)
+	runArgs = append(runArgs, dockerRuntimeImage, binAbs)
+	runArgs = append(runArgs, args...)
 
 	containerID, err = dockerRun(runArgs...)
 	if err != nil {
@@ -212,10 +209,11 @@ func startDockerServer(serverID int, binary string, args []string, workDir, sess
 
 	pid, err := dockerContainerPID(name)
 	if err != nil {
-		_ = stopDockerContainer(serverID)
+		_ = stopDockerContainer(serverID, "")
 		return "", nil, fmt.Errorf("container started but PID unavailable: %w", err)
 	}
 
+	go followDockerLogsToFile(name, logAbs)
 	return containerID, watchDockerContainer(name, pid), nil
 }
 
@@ -259,6 +257,48 @@ func watchDockerContainer(containerName string, pid int) *managedProc {
 	return &managedProc{pid: pid, done: done}
 }
 
+// followDockerLogsToFile appends container stdout/stderr into the session log on the host.
+// Linux Arma writes its RPT to stdout, so this is the durable historic log.
+func followDockerLogsToFile(containerName, logPath string) {
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("[DOCKER] open session log %s: %v", logPath, err)
+		return
+	}
+	defer f.Close()
+
+	// No --since: include everything emitted since container start (covers the
+	// small race between `docker run` and this follow starting).
+	cmd := exec.Command("docker", "logs", "-f", containerName)
+	cmd.Stdout = f
+	cmd.Stderr = f
+	_ = cmd.Run()
+	_ = f.Sync()
+}
+
+// flushDockerLogsToFile rewrites the session log from a full `docker logs` dump.
+// Call after docker stop and before docker rm so historic logs survive removal.
+func flushDockerLogsToFile(containerName, logPath string) {
+	if strings.TrimSpace(logPath) == "" || !dockerContainerExists(containerName) {
+		return
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		log.Printf("[DOCKER] flush session log %s: %v", logPath, err)
+		return
+	}
+	defer f.Close()
+
+	cmd := exec.Command("docker", "logs", containerName)
+	cmd.Stdout = f
+	cmd.Stderr = f
+	if err := cmd.Run(); err != nil {
+		log.Printf("[DOCKER] docker logs %s: %v", containerName, err)
+		return
+	}
+	_ = f.Sync()
+}
+
 func dockerInspectRunning(nameOrID string) (bool, error) {
 	out, err := dockerRun("inspect", "-f", "{{.State.Running}}", nameOrID)
 	if err != nil {
@@ -287,7 +327,7 @@ func removeDockerContainer(name string) error {
 	return nil
 }
 
-func stopDockerContainer(serverID int) error {
+func stopDockerContainer(serverID int, sessionLogPath string) error {
 	name := dockerContainerName(serverID)
 	cmd := exec.Command("docker", "stop", "-t", "15", name)
 	var stderr bytes.Buffer
@@ -304,6 +344,10 @@ func stopDockerContainer(serverID int) error {
 		}
 		return fmt.Errorf("docker stop %s: %s", name, msg)
 	}
+	// Let the followDockerLogsToFile goroutine exit before we rewrite the file.
+	time.Sleep(300 * time.Millisecond)
+	// Persist stdout/stderr before rm — Linux Arma RPT lives in docker logs.
+	flushDockerLogsToFile(name, sessionLogPath)
 	_ = removeDockerContainer(name)
 	return nil
 }

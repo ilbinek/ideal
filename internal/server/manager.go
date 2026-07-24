@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -96,7 +97,7 @@ func ReconcileStatuses() {
 			}
 		case database.ServerStatusStopping:
 			if alive && dockerContainerRunning(s.ID) {
-				_ = stopDockerContainer(s.ID)
+				_ = stopDockerContainer(s.ID, latestSessionLogPath(s.Slug))
 			} else if alive && s.PID > 0 && processRunning(s.PID) {
 				if err := stopProcess(s.PID); err != nil && ServerAlive(s.PID, s.GamePort) {
 					// Kill failed and process still up — unknown so Start/Stop stay usable.
@@ -508,7 +509,7 @@ func (m *Manager) Start(serverID int) error {
 	// Confirm the process did not die immediately (e.g. port still held on UDP).
 	if err := verifyProcessStartup(proc, srv.GamePort, 8*time.Second); err != nil {
 		if useDocker {
-			_ = stopDockerContainer(serverID)
+			_ = stopDockerContainer(serverID, sessionLogPath)
 		} else {
 			_ = stopProcess(proc.pid)
 		}
@@ -522,7 +523,12 @@ func (m *Manager) Start(serverID int) error {
 	}
 
 	gen := atomic.AddUint64(&nextInstanceGen, 1)
+	// Linux Arma prints RPT to stdout (captured into the session log under Docker).
+	// Point ActiveRPT at that file so live tail and the log list stay in sync.
 	rptPath := ResolveRPTPath(srv.Slug, "")
+	if useDocker {
+		rptPath = sessionLogPath
+	}
 
 	m.mu.Lock()
 	m.instances[serverID] = &runningInstance{
@@ -543,7 +549,9 @@ func (m *Manager) Start(serverID int) error {
 	m.broadcast()
 
 	go m.watchServer(serverID, gen)
-	go m.resolveRPT(serverID, gen, startTime)
+	if !useDocker {
+		go m.resolveRPT(serverID, gen, startTime)
+	}
 
 	// Start configured headless clients after the dedicated server is up.
 	go func() {
@@ -646,7 +654,7 @@ func (m *Manager) Stop(serverID int) error {
 
 	var stopErr error
 	if inst.dockerMode {
-		stopErr = stopDockerContainer(serverID)
+		stopErr = stopDockerContainer(serverID, inst.sessionLogPath)
 	} else {
 		stopErr = stopProcess(inst.pid)
 	}
@@ -697,7 +705,7 @@ func (m *Manager) stopOrphan(serverID int) error {
 		return err
 	}
 	if _, _, running, _ := findDockerContainer(serverID); running || dockerContainerRunning(serverID) {
-		_ = stopDockerContainer(serverID)
+		_ = stopDockerContainer(serverID, latestSessionLogPath(srv.Slug))
 	} else if srv.PID > 0 && processRunning(srv.PID) {
 		if err := stopProcess(srv.PID); err != nil && ServerAlive(srv.PID, srv.GamePort) {
 			return err
@@ -727,6 +735,22 @@ func (m *Manager) Restart(serverID int) error {
 		return err
 	}
 	return m.Start(serverID)
+}
+
+// latestSessionLogPath returns the newest session-*.log under the instance logs dir.
+func latestSessionLogPath(slug string) string {
+	logs, err := ListLogs(slug)
+	if err != nil {
+		return ""
+	}
+	for _, e := range logs {
+		name := strings.ToLower(e.Name)
+		if strings.HasPrefix(name, "session-") && strings.HasSuffix(name, ".log") {
+			return e.Path
+		}
+	}
+	return filepath.Join(InstanceDir(slug), "logs",
+		fmt.Sprintf("session-%s.log", time.Now().Format("2006-01-02_150405")))
 }
 
 // ActiveRPTPath returns the active RPT path for a running server.
