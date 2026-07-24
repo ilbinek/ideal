@@ -35,8 +35,6 @@ export function Login() {
     },
   });
 
-  const steamEnabled = session.data?.steamLoginEnabled === true;
-
   if (session.isLoading || !session.isFetched) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -44,6 +42,15 @@ export function Login() {
       </div>
     );
   }
+
+  const steamErrorMessage =
+    steamError === "steam_cancelled"
+      ? "Steam sign-in was cancelled."
+      : steamError === "steam_unauthorized"
+        ? "Your Steam account is not authorized. Ask an admin to add you."
+        : steamError
+          ? "Steam sign-in failed. Try again."
+          : null;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -90,33 +97,25 @@ export function Login() {
             </Button>
           </form>
 
-          {steamEnabled && (
-            <>
-              <div className="relative flex items-center gap-3">
-                <div className="h-px flex-1 bg-border" />
-                <span className="text-xs text-muted-foreground">or</span>
-                <div className="h-px flex-1 bg-border" />
-              </div>
-              {steamError && (
-                <p className="text-sm text-destructive">
-                  {steamError === "steam_cancelled"
-                    ? "Steam sign-in was cancelled."
-                    : "Steam sign-in failed. Try again."}
-                </p>
-              )}
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                asChild
-              >
-                <a href="/api/auth/steam">
-                  <SteamIcon className="size-4" />
-                  Sign in through Steam
-                </a>
-              </Button>
-            </>
+          <div className="relative flex items-center gap-3">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted-foreground">or</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+          {steamErrorMessage && (
+            <p className="text-sm text-destructive">{steamErrorMessage}</p>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            asChild
+          >
+            <a href="/api/auth/steam">
+              <SteamIcon className="size-4" />
+              Sign in through Steam
+            </a>
+          </Button>
         </CardContent>
       </Card>
       <CookieNotice />

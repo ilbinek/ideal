@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"arma3modmanager/internal/config"
 	"arma3modmanager/internal/database"
 )
 
@@ -19,13 +19,9 @@ const steamOpenIDEndpoint = "https://steamcommunity.com/openid/login"
 
 var steamIDFromClaimed = regexp.MustCompile(`^https://steamcommunity\.com/openid/id/(\d+)$`)
 
-// PublicBaseURL returns the absolute site origin for OpenID realm/return_to.
+// PublicBaseURL returns the absolute site origin for OpenID realm/return_to,
+// derived from the current request (Host / X-Forwarded-* headers).
 func PublicBaseURL(r *http.Request) string {
-	if config.AppConfig != nil {
-		if u := strings.TrimRight(strings.TrimSpace(config.AppConfig.PublicURL), "/"); u != "" {
-			return u
-		}
-	}
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		scheme = "https"
@@ -38,17 +34,8 @@ func PublicBaseURL(r *http.Request) string {
 	return scheme + "://" + host
 }
 
-func SteamLoginEnabled() bool {
-	return config.AppConfig != nil && config.AppConfig.SteamLoginEnabled
-}
-
 // SteamOpenIDStartHandler redirects the browser to Steam OpenID.
 func SteamOpenIDStartHandler(w http.ResponseWriter, r *http.Request) {
-	if !SteamLoginEnabled() {
-		http.Error(w, "Steam login is disabled", http.StatusNotFound)
-		return
-	}
-
 	nonce, err := generateToken()
 	if err != nil {
 		http.Error(w, "failed to start Steam login", http.StatusInternalServerError)
@@ -79,13 +66,9 @@ func SteamOpenIDStartHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, steamOpenIDEndpoint+"?"+params.Encode(), http.StatusFound)
 }
 
-// SteamOpenIDCallbackHandler verifies Steam's assertion and creates a user session.
+// SteamOpenIDCallbackHandler verifies Steam's assertion and creates a user session
+// only for users that already exist in the database (invite-only).
 func SteamOpenIDCallbackHandler(w http.ResponseWriter, r *http.Request) {
-	if !SteamLoginEnabled() {
-		http.Error(w, "Steam login is disabled", http.StatusNotFound)
-		return
-	}
-
 	nonceCookie, err := r.Cookie(NonceCookieName)
 	if err != nil || nonceCookie.Value == "" {
 		http.Error(w, "missing Steam login state", http.StatusBadRequest)
@@ -121,13 +104,14 @@ func SteamOpenIDCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	displayName, avatarURL := fetchSteamPersona(steamID)
-	if displayName == "" {
-		displayName = steamID
-	}
 
-	user, err := database.UpsertSteamUser(steamID, displayName, avatarURL)
+	user, err := database.UpdateSteamUserLogin(steamID, displayName, avatarURL)
+	if err == sql.ErrNoRows {
+		http.Redirect(w, r, "/login?error=steam_unauthorized", http.StatusFound)
+		return
+	}
 	if err != nil {
-		log.Printf("[auth] upsert Steam user: %v", err)
+		log.Printf("[auth] update Steam user login: %v", err)
 		http.Redirect(w, r, "/login?error=steam_failed", http.StatusFound)
 		return
 	}
@@ -178,6 +162,75 @@ func verifySteamOpenID(r *http.Request) (string, error) {
 
 func fetchSteamPersona(steamID string) (displayName, avatarURL string) {
 	return FetchSteamPersona(steamID)
+}
+
+var (
+	steamID64Re       = regexp.MustCompile(`^7656119\d{10}$`)
+	steamProfileURLRe = regexp.MustCompile(`(?i)^https?://(?:www\.)?steamcommunity\.com/profiles/(7656119\d{10})(?:[/?#].*)?$`)
+	steamVanityURLRe  = regexp.MustCompile(`(?i)^https?://(?:www\.)?steamcommunity\.com/id/([^/?#]+)(?:[/?#].*)?$`)
+)
+
+// ResolveSteamIdentifier accepts a SteamID64 or a steamcommunity.com profile/vanity URL
+// and returns a validated SteamID64.
+func ResolveSteamIdentifier(input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", fmt.Errorf("steam identifier is required")
+	}
+	if steamID64Re.MatchString(input) {
+		return input, nil
+	}
+
+	if m := steamProfileURLRe.FindStringSubmatch(input); len(m) == 2 {
+		return m[1], nil
+	}
+
+	if m := steamVanityURLRe.FindStringSubmatch(input); len(m) == 2 {
+		vanity := m[1]
+		return resolveVanityURL(vanity)
+	}
+
+	return "", fmt.Errorf("expected SteamID64 or steamcommunity.com profile/vanity URL")
+}
+
+func resolveVanityURL(vanity string) (string, error) {
+	cfg, err := database.GetConfig()
+	if err != nil || cfg == nil || cfg.ApiKey == "" {
+		return "", fmt.Errorf("Steam Web API key is required to resolve vanity URLs")
+	}
+
+	u := fmt.Sprintf(
+		"https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?key=%s&vanityurl=%s",
+		url.QueryEscape(cfg.ApiKey), url.QueryEscape(vanity),
+	)
+	resp, err := http.Get(u)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve vanity URL: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to resolve vanity URL (HTTP %d)", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Response struct {
+			Success int    `json:"success"`
+			SteamID string `json:"steamid"`
+			Message string `json:"message"`
+		} `json:"response"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("failed to parse vanity URL response")
+	}
+	// Steam: success 1 = found
+	if parsed.Response.Success != 1 || !steamID64Re.MatchString(parsed.Response.SteamID) {
+		msg := parsed.Response.Message
+		if msg == "" {
+			msg = "vanity URL not found"
+		}
+		return "", fmt.Errorf("%s", msg)
+	}
+	return parsed.Response.SteamID, nil
 }
 
 // FetchSteamPersona looks up display name and avatar via the Steam Web API when a key is configured.

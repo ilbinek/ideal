@@ -54,8 +54,7 @@ func LogoutAPIHandler(w http.ResponseWriter, r *http.Request) {
 func SessionHandler(w http.ResponseWriter, r *http.Request) {
 	p := auth.LoadPrincipal(r)
 	resp := map[string]interface{}{
-		"authenticated":     p != nil,
-		"steamLoginEnabled": auth.SteamLoginEnabled(),
+		"authenticated": p != nil,
 	}
 	if p == nil {
 		writeJSON(w, http.StatusOK, resp)

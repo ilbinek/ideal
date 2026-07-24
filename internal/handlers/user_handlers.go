@@ -4,15 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"arma3modmanager/internal/auth"
 	"arma3modmanager/internal/database"
 )
-
-var steamID64Re = regexp.MustCompile(`^7656119\d{10}$`)
 
 func ListUsersHandler(w http.ResponseWriter, r *http.Request) {
 	users, err := database.ListUsers()
@@ -35,9 +32,9 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	steamID := strings.TrimSpace(body.SteamID)
-	if !steamID64Re.MatchString(steamID) {
-		writeError(w, http.StatusBadRequest, "steamId must be a 17-digit SteamID64 (7656119…)")
+	steamID, err := auth.ResolveSteamIdentifier(body.SteamID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if existing, err := database.GetUserBySteamID(steamID); err == nil && existing != nil {

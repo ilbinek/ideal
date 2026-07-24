@@ -16,8 +16,6 @@ import {
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/PageHeader";
 
-const steamId64Re = /^7656119\d{10}$/;
-
 export function UsersPage() {
   const queryClient = useQueryClient();
   const users = useQuery({ queryKey: ["users"], queryFn: () => api.getUsers() });
@@ -73,7 +71,7 @@ export function UsersPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Users"
-        description="Add Steam users by SteamID64 and grant roles before or after they sign in."
+        description="Add Steam users manually, then grant roles. Only listed users can sign in with Steam."
       />
 
       {error && (
@@ -102,8 +100,7 @@ export function UsersPage() {
               No Steam users yet
             </CardTitle>
             <CardDescription>
-              Add a user above with their SteamID64, or enable Steam login in config.json and let
-              them sign in once.
+              Add a user above with their SteamID64 or Steam profile URL before they can sign in.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -161,8 +158,8 @@ function AddUserCard({
 
   const submit = async () => {
     const id = steamId.trim();
-    if (!steamId64Re.test(id)) {
-      setLocalError("Enter a 17-digit SteamID64 starting with 7656119");
+    if (!id) {
+      setLocalError("Enter a SteamID64 or Steam profile URL");
       return;
     }
     setLocalError("");
@@ -192,18 +189,18 @@ function AddUserCard({
           Add user
         </CardTitle>
         <CardDescription>
-          Paste a numeric SteamID64. Persona name/avatar are fetched when a Steam Web API key is
-          configured.
+          Paste a SteamID64 or steamcommunity.com profile/vanity URL. Persona name/avatar are
+          fetched when a Steam Web API key is configured (required for vanity URLs).
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
-          <Label htmlFor="new-steam-id">SteamID64</Label>
+          <Label htmlFor="new-steam-id">Steam ID or profile URL</Label>
           <Input
             id="new-steam-id"
             value={steamId}
             onChange={(e) => setSteamId(e.target.value)}
-            placeholder="76561198000000000"
+            placeholder="76561198… or https://steamcommunity.com/id/…"
             className="font-mono"
           />
         </div>

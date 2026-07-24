@@ -72,38 +72,30 @@ func migrateUsers() error {
 	return nil
 }
 
-func UpsertSteamUser(steamID, displayName, avatarURL string) (*User, error) {
-	now := time.Now()
+// UpdateSteamUserLogin refreshes persona fields and last_login_at for an existing Steam user.
+func UpdateSteamUserLogin(steamID, displayName, avatarURL string) (*User, error) {
 	existing, err := GetUserBySteamID(steamID)
-	if err == nil && existing != nil {
-		_, err = db.Exec(
-			`UPDATE users SET display_name = ?, avatar_url = ?, last_login_at = ? WHERE id = ?`,
-			displayName, avatarURL, now, existing.ID,
-		)
-		if err != nil {
-			return nil, err
-		}
-		existing.DisplayName = displayName
-		existing.AvatarURL = avatarURL
-		existing.LastLoginAt = &now
-		return existing, nil
-	}
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil {
 		return nil, err
 	}
-
-	res, err := db.Exec(
-		`INSERT INTO users (steam_id, display_name, avatar_url, last_login_at) VALUES (?, ?, ?, ?)`,
-		steamID, displayName, avatarURL, now,
+	now := time.Now()
+	if displayName == "" {
+		displayName = existing.DisplayName
+	}
+	if avatarURL == "" {
+		avatarURL = existing.AvatarURL
+	}
+	_, err = db.Exec(
+		`UPDATE users SET display_name = ?, avatar_url = ?, last_login_at = ? WHERE id = ?`,
+		displayName, avatarURL, now, existing.ID,
 	)
 	if err != nil {
 		return nil, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-	return GetUser(int(id))
+	existing.DisplayName = displayName
+	existing.AvatarURL = avatarURL
+	existing.LastLoginAt = &now
+	return existing, nil
 }
 
 // CreateSteamUser inserts a user who has not logged in yet (last_login_at NULL).

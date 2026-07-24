@@ -7,10 +7,8 @@ import (
 )
 
 type Config struct {
-	Password           string `json:"password"`
-	Port               string `json:"port"`
-	SteamLoginEnabled  bool   `json:"steamLoginEnabled"`
-	PublicURL          string `json:"publicUrl"`
+	Password string `json:"password"`
+	Port     string `json:"port"`
 }
 
 var AppConfig *Config
@@ -22,10 +20,8 @@ func Load() error {
 		if os.IsNotExist(err) {
 			log.Println("Config file not found, creating default config.json")
 			AppConfig = &Config{
-				Password:          "changeme",
-				Port:              "8080",
-				SteamLoginEnabled: false,
-				PublicURL:         "",
+				Password: "changeme",
+				Port:     "8080",
 			}
 			return Save()
 		}

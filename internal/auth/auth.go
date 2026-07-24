@@ -83,9 +83,6 @@ func generateToken() (string, error) {
 }
 
 func cookieSecure(r *http.Request) bool {
-	if config.AppConfig != nil && strings.HasPrefix(strings.ToLower(config.AppConfig.PublicURL), "https://") {
-		return true
-	}
 	if r != nil {
 		if r.TLS != nil {
 			return true

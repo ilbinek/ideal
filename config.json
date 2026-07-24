@@ -1,6 +1,4 @@
 {
   "password": "123",
-  "port": "8080",
-  "steamLoginEnabled": true,
-  "publicUrl": ""
+  "port": "8080"
 }

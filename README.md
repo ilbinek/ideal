@@ -128,7 +128,7 @@ The mode applies on the **next** server start (running processes/containers are 
    ./ideal
    ```
 4. Open `http://localhost:8080` (or the port in `config.json`)
-5. Log in with the password you set (or enable `steamLoginEnabled` and use Steam)
+5. Log in with the password you set, or sign in through Steam (Steam users must be added first on the Users page)
 
 ---
 
@@ -139,9 +139,7 @@ The mode applies on the **next** server start (running processes/containers are 
 ```json
 {
   "password": "changeme",
-  "port": "8080",
-  "steamLoginEnabled": false,
-  "publicUrl": ""
+  "port": "8080"
 }
 ```
 
@@ -149,15 +147,15 @@ The mode applies on the **next** server start (running processes/containers are 
 |---|---|
 | `password` | Bootstrap admin password (password login). Always has full access. |
 | `port` | HTTP listen port (unless overridden by `IDEAL_LISTEN`). |
-| `steamLoginEnabled` | When `true`, users can sign in with Steam OpenID (“Sign in through Steam”). |
-| `publicUrl` | Optional absolute site URL (e.g. `https://mods.example.com`) used for Steam OpenID return URLs behind a reverse proxy. Leave empty to derive from the request. |
+
+Steam OpenID login is always available. Behind a reverse proxy, set `X-Forwarded-Proto` and `X-Forwarded-Host` (or Host) so Steam callback URLs match the browser URL.
 
 Steam credentials, downloader choice, and related options live in the SQLite database and are edited in the **Settings** UI — not in `config.json`.
 
 ### Users and permissions
 
 - **Password admin** — logs in with `config.json` `password`; always full admin.
-- **Steam users** — appear after first Steam sign-in with no permissions until a full admin grants roles on the **Users** page.
+- **Steam users** — must be added manually on the **Users** page (SteamID64 or steamcommunity.com profile/vanity URL) before they can sign in. Grant roles there as needed.
 - **Roles:** full admin; manage mods; manage branches; per-server admin (assigned servers only).
 - Sessions are stored in SQLite and last 30 days (survive restarts).
 
@@ -221,7 +219,7 @@ Point your A3Sync repository at that directory.
 ```
 .
 ├── ideal / ideal.exe     # Main executable (release) or under dist/ when built with Task
-├── config.json           # Admin password, port, Steam login toggle
+├── config.json           # Admin password and port
 ├── arma3mods.db          # SQLite database
 ├── .gosteam/             # Built-in downloader token/cache
 ├── mods/                 # Workshop mods (<workshopId>/)

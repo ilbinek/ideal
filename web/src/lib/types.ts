@@ -95,7 +95,6 @@ export interface SessionPermissions {
 
 export interface Session {
   authenticated: boolean;
-  steamLoginEnabled: boolean;
   subjectType?: "password_admin" | "user";
   user?: SessionUser;
   permissions?: SessionPermissions;
