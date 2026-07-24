@@ -27,6 +27,7 @@ export interface Settings {
   maxConcurrentDownloads: number;
   updateCheckIntervalMinutes: number;
   discordWebhookUrl: string;
+  autoDownloadUpdates: boolean;
   useDocker: boolean;
   platform: string;
   dockerAvailable: boolean;

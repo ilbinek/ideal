@@ -11,6 +11,7 @@ import (
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/steam"
+	"arma3modmanager/internal/steamcmdinfo"
 	"arma3modmanager/internal/utils"
 )
 
@@ -239,6 +240,19 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	log.Printf("[BRANCH] install complete — game files at %s", gameDir)
 	utils.EnsureDedicatedServerBinariesExecutable(installDir)
 	buildID := depot.ReadInstalledBuildID(installDir)
+	if buildID == "" {
+		// gosteam does not write appmanifest_*.acf; fall back to the remote build ID
+		// so update checks can detect the next release.
+		if remote, err := steamcmdinfo.GetDedicatedServerBranches(); err != nil {
+			log.Printf("[BRANCH] could not resolve remote build ID: %v", err)
+		} else {
+			key := steamcmdinfo.NormalizeSteamBranch(branch.SteamBranch)
+			if info, ok := remote[key]; ok && info.BuildID != "" {
+				buildID = info.BuildID
+				log.Printf("[BRANCH] using remote build ID %s for branch %q (%s)", buildID, branch.Name, key)
+			}
+		}
+	}
 	if err := contentver.FinalizeBranchInstall(branchID, branch.InstallPath, generation, buildID); err != nil {
 		log.Printf("[BRANCH] failed to finalize branch status: %v", err)
 		b.setError(fmt.Sprintf("install finished but failed to record version: %v", err))

@@ -107,6 +107,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		"maxConcurrentDownloads":     4,
 		"updateCheckIntervalMinutes": 0,
 		"discordWebhookUrl":          "",
+		"autoDownloadUpdates":        false,
 		"useDocker":                  false,
 		"platform":                   runtime.GOOS,
 		"dockerAvailable":            server.DockerAvailable(),
@@ -125,6 +126,7 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["updateCheckIntervalMinutes"] = config.UpdateCheckIntervalMinutes
 		resp["discordWebhookUrl"] = config.DiscordWebhookURL
+		resp["autoDownloadUpdates"] = config.AutoDownloadUpdates
 		resp["useDocker"] = config.UseDocker
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -141,6 +143,7 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 		MaxConcurrentDownloads     int    `json:"maxConcurrentDownloads"`
 		UpdateCheckIntervalMinutes int    `json:"updateCheckIntervalMinutes"`
 		DiscordWebhookURL          string `json:"discordWebhookUrl"`
+		AutoDownloadUpdates        bool   `json:"autoDownloadUpdates"`
 		UseDocker                  bool   `json:"useDocker"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -178,7 +181,8 @@ func SaveSettingsAPIHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := database.SaveConfig(
 		body.Username, password, body.ApiKey, downloader, body.SteamCmdPath, body.DepotDownloaderPath,
-		body.MaxConcurrentDownloads, body.UpdateCheckIntervalMinutes, body.DiscordWebhookURL, body.UseDocker,
+		body.MaxConcurrentDownloads, body.UpdateCheckIntervalMinutes, body.DiscordWebhookURL,
+		body.AutoDownloadUpdates, body.UseDocker,
 	); err != nil {
 		log.Printf("Error saving config: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to save settings")

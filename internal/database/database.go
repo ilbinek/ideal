@@ -25,7 +25,8 @@ type Config struct {
 	MaxConcurrentDownloads     int    `json:"maxConcurrentDownloads"`     // gosteam: mods downloaded at once
 	UpdateCheckIntervalMinutes int    `json:"updateCheckIntervalMinutes"` // 0 = off
 	DiscordWebhookURL          string `json:"discordWebhookUrl"`
-	UseDocker                  bool   `json:"useDocker"` // Linux only: run servers in Docker
+	AutoDownloadUpdates        bool   `json:"autoDownloadUpdates"` // download mods/branches when check finds updates
+	UseDocker                  bool   `json:"useDocker"`           // Linux only: run servers in Docker
 }
 
 type Modset struct {
@@ -117,6 +118,7 @@ func migrate() error {
 		"ALTER TABLE config ADD COLUMN max_concurrent_downloads INTEGER DEFAULT 4",
 		"ALTER TABLE config ADD COLUMN update_check_interval_minutes INTEGER DEFAULT 0",
 		"ALTER TABLE config ADD COLUMN discord_webhook_url TEXT DEFAULT ''",
+		"ALTER TABLE config ADD COLUMN auto_download_updates INTEGER DEFAULT 0",
 		"ALTER TABLE config ADD COLUMN use_docker INTEGER DEFAULT 0",
 		"ALTER TABLE mods ADD COLUMN last_notified_updated INTEGER DEFAULT 0",
 	}
@@ -143,7 +145,7 @@ func Close() error {
 
 func GetConfig() (*Config, error) {
 	config := &Config{}
-	var useDocker int
+	var useDocker, autoDownload int
 	err := db.QueryRow(`
 		SELECT id, username, password, COALESCE(api_key, ''),
 		       COALESCE(downloader, 'gosteam'),
@@ -152,15 +154,17 @@ func GetConfig() (*Config, error) {
 		       COALESCE(max_concurrent_downloads, 4),
 		       COALESCE(update_check_interval_minutes, 0),
 		       COALESCE(discord_webhook_url, ''),
+		       COALESCE(auto_download_updates, 0),
 		       COALESCE(use_docker, 0)
 		FROM config LIMIT 1`).
 		Scan(&config.ID, &config.Username, &config.Password, &config.ApiKey,
 			&config.Downloader, &config.SteamCmdPath, &config.DepotDownloaderPath,
 			&config.MaxConcurrentDownloads, &config.UpdateCheckIntervalMinutes,
-			&config.DiscordWebhookURL, &useDocker)
+			&config.DiscordWebhookURL, &autoDownload, &useDocker)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
+	config.AutoDownloadUpdates = autoDownload != 0
 	config.UseDocker = useDocker != 0
 	return config, err
 }
@@ -170,7 +174,7 @@ var ValidUpdateCheckIntervals = map[int]bool{
 	0: true, 15: true, 30: true, 60: true, 360: true, 720: true, 1440: true,
 }
 
-func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string, maxConcurrentDownloads, updateCheckIntervalMinutes int, discordWebhookURL string, useDocker bool) error {
+func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath string, maxConcurrentDownloads, updateCheckIntervalMinutes int, discordWebhookURL string, autoDownloadUpdates, useDocker bool) error {
 	config, err := GetConfig()
 	if err != nil {
 		return err
@@ -182,6 +186,10 @@ func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownl
 	if !ValidUpdateCheckIntervals[updateCheckIntervalMinutes] {
 		updateCheckIntervalMinutes = 0
 	}
+	autoDownloadInt := 0
+	if autoDownloadUpdates {
+		autoDownloadInt = 1
+	}
 	useDockerInt := 0
 	if useDocker {
 		useDockerInt = 1
@@ -190,18 +198,18 @@ func SaveConfig(username, password, apiKey, downloader, steamCmdPath, depotDownl
 	if config == nil {
 		_, err = db.Exec(
 			`INSERT INTO config (username, password, api_key, downloader, steam_cmd_path, depot_downloader_path,
-			 max_concurrent_downloads, update_check_interval_minutes, discord_webhook_url, use_docker)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 max_concurrent_downloads, update_check_interval_minutes, discord_webhook_url, auto_download_updates, use_docker)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
-			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL, useDockerInt,
+			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL, autoDownloadInt, useDockerInt,
 		)
 	} else {
 		_, err = db.Exec(
 			`UPDATE config SET username = ?, password = ?, api_key = ?, downloader = ?, steam_cmd_path = ?,
 			 depot_downloader_path = ?, max_concurrent_downloads = ?, update_check_interval_minutes = ?,
-			 discord_webhook_url = ?, use_docker = ? WHERE id = ?`,
+			 discord_webhook_url = ?, auto_download_updates = ?, use_docker = ? WHERE id = ?`,
 			username, password, apiKey, downloader, steamCmdPath, depotDownloaderPath,
-			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL, useDockerInt, config.ID,
+			maxConcurrentDownloads, updateCheckIntervalMinutes, discordWebhookURL, autoDownloadInt, useDockerInt, config.ID,
 		)
 	}
 	return err

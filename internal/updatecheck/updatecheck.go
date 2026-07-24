@@ -10,6 +10,8 @@ import (
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/depot"
 	"arma3modmanager/internal/discordhook"
+	"arma3modmanager/internal/queue"
+	"arma3modmanager/internal/server"
 	"arma3modmanager/internal/steamcmdinfo"
 	"arma3modmanager/internal/workshop"
 )
@@ -105,7 +107,9 @@ func CheckBranches(branches []database.ArmaBranch) (map[int]string, error) {
 			continue
 		}
 
-		updateAvailable := localBuild != "" && localBuild != info.BuildID
+		// Empty local build (common with gosteam — no appmanifest ACF) is treated as
+		// outdated so Discord alerts and auto-download can still fire.
+		updateAvailable := localBuild != info.BuildID
 		if err := database.UpdateBranchChecked(b.ID, updateAvailable); err != nil {
 			log.Printf("[UPDATECHECK] UpdateBranchChecked(%d): %v", b.ID, err)
 		}
@@ -193,12 +197,15 @@ func RunOnce() {
 		return
 	}
 
+	var mods []database.Mod
+	var updates ModResult
 	if cfg.ApiKey != "" {
-		mods, err := database.GetAllMods()
+		mods, err = database.GetAllMods()
 		if err != nil {
 			log.Printf("[UPDATECHECK] GetAllMods: %v", err)
 		} else {
-			updates, steamTimes, err := CheckMods(cfg.ApiKey, mods)
+			var steamTimes map[int]int64
+			updates, steamTimes, err = CheckMods(cfg.ApiKey, mods)
 			if err != nil {
 				log.Printf("[UPDATECHECK] CheckMods: %v", err)
 			} else {
@@ -218,6 +225,46 @@ func RunOnce() {
 		return
 	}
 	NotifyBranchUpdates(cfg.DiscordWebhookURL, branches, outdated)
+
+	if cfg.AutoDownloadUpdates {
+		autoDownload(mods, updates, outdated)
+	}
+}
+
+// autoDownload enqueues outdated/missing mods and starts branch installs for outdated branches.
+// Soft versioning isolates new generations from running servers' pinned content.
+func autoDownload(mods []database.Mod, updates ModResult, outdatedBranches map[int]string) {
+	if len(mods) > 0 && updates != nil {
+		targets := make([]database.Mod, 0)
+		modByID := make(map[int]database.Mod, len(mods))
+		for _, m := range mods {
+			modByID[m.ID] = m
+		}
+		for id, available := range updates {
+			if !available {
+				continue
+			}
+			if m, ok := modByID[id]; ok {
+				targets = append(targets, m)
+			}
+		}
+		if len(targets) > 0 {
+			added := queue.Default.Enqueue(targets)
+			if added > 0 {
+				log.Printf("[UPDATECHECK] auto-download enqueued %d mod(s)", added)
+			}
+		}
+	}
+
+	for branchID := range outdatedBranches {
+		if err := server.BranchInstallerDefault.Install(branchID); err != nil {
+			log.Printf("[UPDATECHECK] auto-download branch %d: %v", branchID, err)
+			continue
+		}
+		log.Printf("[UPDATECHECK] auto-download started branch install %d", branchID)
+		// Installer allows only one at a time; remaining branches retry next tick.
+		break
+	}
 }
 
 // Scheduler runs periodic update checks.

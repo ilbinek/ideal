@@ -32,6 +32,7 @@ export function SettingsPage() {
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(4);
   const [updateCheckIntervalMinutes, setUpdateCheckIntervalMinutes] = useState(0);
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
+  const [autoDownloadUpdates, setAutoDownloadUpdates] = useState(false);
   const [useDocker, setUseDocker] = useState(false);
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export function SettingsPage() {
       setMaxConcurrentDownloads(data.maxConcurrentDownloads || 4);
       setUpdateCheckIntervalMinutes(data.updateCheckIntervalMinutes || 0);
       setDiscordWebhookUrl(data.discordWebhookUrl || "");
+      setAutoDownloadUpdates(!!data.autoDownloadUpdates);
       setUseDocker(!!data.useDocker);
     }
   }, [data]);
@@ -60,6 +62,7 @@ export function SettingsPage() {
         maxConcurrentDownloads,
         updateCheckIntervalMinutes,
         discordWebhookUrl,
+        autoDownloadUpdates,
         useDocker,
       }),
     onSuccess: () => {
@@ -261,6 +264,25 @@ export function SettingsPage() {
               Leave blank to update flags in the UI without sending Discord messages.
             </p>
           </div>
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={autoDownloadUpdates}
+              onChange={(e) => setAutoDownloadUpdates(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium">Automatic downloads</span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                When auto-check finds updates, download Workshop mods and server
+                branch files immediately. Soft versioning keeps running servers on
+                their pinned files until they restart.
+                {updateCheckIntervalMinutes === 0
+                  ? " Enable an auto-check interval above for this to take effect."
+                  : null}
+              </span>
+            </span>
+          </label>
         </CardContent>
       </Card>
 

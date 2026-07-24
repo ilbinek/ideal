@@ -126,6 +126,7 @@ export const api = {
     maxConcurrentDownloads: number;
     updateCheckIntervalMinutes: number;
     discordWebhookUrl: string;
+    autoDownloadUpdates: boolean;
     useDocker: boolean;
   }) =>
     request<{ ok: boolean }>("/api/settings", {
