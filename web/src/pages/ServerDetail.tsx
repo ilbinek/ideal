@@ -1884,6 +1884,12 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
               {logError}
             </p>
           )}
+          {logs.isError && (
+            <p className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+              Failed to list logs
+              {logs.error instanceof Error ? `: ${logs.error.message}` : ""}
+            </p>
+          )}
           {(logs.data?.length ?? 0) > 0 && (
             <label className="mb-2 flex items-center gap-2 px-2 text-xs text-muted-foreground">
               <input

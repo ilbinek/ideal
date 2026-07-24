@@ -183,6 +183,8 @@ func startDockerServer(serverID int, binary string, args []string, workDir, sess
 		"--label", dockerLabelManaged,
 		"--label", fmt.Sprintf("%s=%d", dockerLabelServer, serverID),
 		"--network", "host",
+		// Match Ideal's host user so profiles/logs stay readable after stop.
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-e", "HOME=" + homeDir,
 		"-v", dataRoot + ":" + dataRoot + ":rw",
 		"-w", workDirAbs,

@@ -23,22 +23,18 @@ type LogEntry struct {
 }
 
 // ListLogs returns .rpt and session .log files under the server instance.
+// Inaccessible paths (e.g. root-owned profile dirs left by Docker) are skipped
+// so a permission error under profiles/ cannot hide files in logs/.
 func ListLogs(slug string) ([]LogEntry, error) {
 	instanceDir := InstanceDir(slug)
 	seen := make(map[string]struct{})
 	var entries []LogEntry
 
 	logsDir := filepath.Join(instanceDir, "logs")
-	if err := collectLogFiles(logsDir, false, seen, &entries); err != nil {
-		return nil, err
-	}
-	if err := collectLogFiles(instanceDir, false, seen, &entries); err != nil {
-		return nil, err
-	}
+	_ = collectLogFiles(logsDir, false, seen, &entries)
+	_ = collectLogFiles(instanceDir, false, seen, &entries)
 	profilesDir := filepath.Join(instanceDir, "profiles")
-	if err := collectLogFiles(profilesDir, true, seen, &entries); err != nil {
-		return nil, err
-	}
+	_ = collectLogFiles(profilesDir, true, seen, &entries)
 
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].ModTime.After(entries[j].ModTime)
@@ -57,7 +53,8 @@ func collectLogFiles(dir string, recursive bool, seen map[string]struct{}, entri
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		// Permission denied etc. — skip this tree.
+		return nil
 	}
 	if !info.IsDir() {
 		return nil
@@ -82,10 +79,7 @@ func collectLogFiles(dir string, recursive bool, seen map[string]struct{}, entri
 	if !recursive {
 		items, err := os.ReadDir(dir)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
+			return nil
 		}
 		for _, item := range items {
 			if item.IsDir() {
@@ -100,12 +94,13 @@ func collectLogFiles(dir string, recursive bool, seen map[string]struct{}, entri
 		return nil
 	}
 
-	return filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+	_ = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
+			// Skip unreadable dirs/files (common after Docker created root-owned paths).
+			if fi != nil && fi.IsDir() {
+				return filepath.SkipDir
 			}
-			return err
+			return nil
 		}
 		if fi.IsDir() {
 			return nil
@@ -113,6 +108,7 @@ func collectLogFiles(dir string, recursive bool, seen map[string]struct{}, entri
 		add(path, fi)
 		return nil
 	})
+	return nil
 }
 
 func findLogPath(slug, filename string) (string, error) {
@@ -134,10 +130,14 @@ func findLogPath(slug, filename string) (string, error) {
 	var found string
 	_ = filepath.Walk(profilesDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
+			if info != nil && info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		if !info.IsDir() && info.Name() == filename {
+		if info != nil && !info.IsDir() && info.Name() == filename {
 			found = path
+			return filepath.SkipAll
 		}
 		return nil
 	})
