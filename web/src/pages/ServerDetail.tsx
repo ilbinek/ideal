@@ -1570,7 +1570,19 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
   });
   const [viewed, setViewed] = useState<string | null>(null);
   const [archived, setArchived] = useState("");
+  const [archivedMeta, setArchivedMeta] = useState<{
+    nextOffset: number;
+    totalSize: number;
+    truncated: boolean;
+  } | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    if (!isRunning) {
+      void queryClient.invalidateQueries({ queryKey: ["serverLogs", serverId] });
+    }
+  }, [isRunning, queryClient, serverId]);
 
   const logNames = useMemo(
     () => new Set((logs.data ?? []).map((l) => l.name)),
@@ -1642,11 +1654,43 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
       setLogError("");
       setViewed(name);
       setView("file");
-      const data = await api.getServerLog(serverId, name, 0);
-      setArchived(data.content);
+      setArchivedMeta(null);
+      try {
+        const data = await api.getServerLog(serverId, name, 0);
+        setArchived(data.content);
+        const nextOffset = data.nextOffset ?? data.offset + data.content.length;
+        setArchivedMeta({
+          nextOffset,
+          totalSize: data.totalSize,
+          truncated: !!data.truncated || nextOffset < data.totalSize,
+        });
+      } catch (err) {
+        setArchived("");
+        setLogError(err instanceof Error ? err.message : "Failed to load log");
+      }
     },
     [serverId],
   );
+
+  const loadMoreArchived = useCallback(async () => {
+    if (!viewed || !archivedMeta?.truncated || loadingMore) return;
+    setLoadingMore(true);
+    setLogError("");
+    try {
+      const data = await api.getServerLog(serverId, viewed, archivedMeta.nextOffset);
+      setArchived((prev) => prev + data.content);
+      const nextOffset = data.nextOffset ?? data.offset + data.content.length;
+      setArchivedMeta({
+        nextOffset,
+        totalSize: data.totalSize,
+        truncated: !!data.truncated || nextOffset < data.totalSize,
+      });
+    } catch (err) {
+      setLogError(err instanceof Error ? err.message : "Failed to load more");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [archivedMeta, loadingMore, serverId, viewed]);
 
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteServerLog(serverId, name),
@@ -1661,6 +1705,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
       if (viewed === name) {
         setViewed(null);
         setArchived("");
+        setArchivedMeta(null);
         setView(isRunning ? "live" : "file");
       }
       queryClient.invalidateQueries({ queryKey: ["serverLogs", serverId] });
@@ -1679,6 +1724,7 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
       if (viewed && res.deleted.includes(viewed)) {
         setViewed(null);
         setArchived("");
+        setArchivedMeta(null);
         setView(isRunning ? "live" : "file");
       }
       queryClient.invalidateQueries({ queryKey: ["serverLogs", serverId] });
@@ -1988,6 +2034,25 @@ function LogsTab({ serverId, isRunning }: { serverId: number; isRunning: boolean
           </div>
         </CardHeader>
         <CardContent>
+          {!showingLive && archivedMeta?.truncated && (
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
+              <span>
+                Showing {Math.min(archivedMeta.nextOffset, archivedMeta.totalSize).toLocaleString()} of{" "}
+                {archivedMeta.totalSize.toLocaleString()} bytes
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={loadingMore}
+                onClick={() => void loadMoreArchived()}
+              >
+                {loadingMore ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : null}
+                Load more
+              </Button>
+            </div>
+          )}
           <pre
             ref={logRef}
             className="max-h-[500px] overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap"
@@ -2741,6 +2806,12 @@ function HeadlessLogsPanel({
   const [view, setView] = useState<"live" | "file">(isRunning ? "live" : "file");
   const [selected, setSelected] = useState<string | null>(null);
   const [archived, setArchived] = useState("");
+  const [archivedMeta, setArchivedMeta] = useState<{
+    nextOffset: number;
+    totalSize: number;
+    truncated: boolean;
+  } | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [logError, setLogError] = useState("");
 
   const logs = useQuery({
@@ -2752,9 +2823,16 @@ function HeadlessLogsPanel({
   useEffect(() => {
     setSelected(null);
     setArchived("");
+    setArchivedMeta(null);
     setLogError("");
     setView(isRunning ? "live" : "file");
   }, [slot, isRunning]);
+
+  useEffect(() => {
+    if (!isRunning) {
+      void queryClient.invalidateQueries({ queryKey: ["headlessLogs", serverId, slot] });
+    }
+  }, [isRunning, queryClient, serverId, slot]);
 
   const showingLive = isRunning && view === "live";
   const viewerText = showingLive
@@ -2771,11 +2849,43 @@ function HeadlessLogsPanel({
       setLogError("");
       setSelected(name);
       setView("file");
-      const data = await api.getHeadlessLog(serverId, slot, name, 0);
-      setArchived(data.content);
+      setArchivedMeta(null);
+      try {
+        const data = await api.getHeadlessLog(serverId, slot, name, 0);
+        setArchived(data.content);
+        const nextOffset = data.nextOffset ?? data.offset + data.content.length;
+        setArchivedMeta({
+          nextOffset,
+          totalSize: data.totalSize,
+          truncated: !!data.truncated || nextOffset < data.totalSize,
+        });
+      } catch (err) {
+        setArchived("");
+        setLogError(err instanceof Error ? err.message : "Failed to load log");
+      }
     },
     [serverId, slot],
   );
+
+  const loadMoreArchived = useCallback(async () => {
+    if (!selected || !archivedMeta?.truncated || loadingMore) return;
+    setLoadingMore(true);
+    setLogError("");
+    try {
+      const data = await api.getHeadlessLog(serverId, slot, selected, archivedMeta.nextOffset);
+      setArchived((prev) => prev + data.content);
+      const nextOffset = data.nextOffset ?? data.offset + data.content.length;
+      setArchivedMeta({
+        nextOffset,
+        totalSize: data.totalSize,
+        truncated: !!data.truncated || nextOffset < data.totalSize,
+      });
+    } catch (err) {
+      setLogError(err instanceof Error ? err.message : "Failed to load more");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [archivedMeta, loadingMore, selected, serverId, slot]);
 
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteHeadlessLog(serverId, slot, name),
@@ -2784,6 +2894,7 @@ function HeadlessLogsPanel({
       if (selected === name) {
         setSelected(null);
         setArchived("");
+        setArchivedMeta(null);
         setView(isRunning ? "live" : "file");
       }
       queryClient.invalidateQueries({ queryKey: ["headlessLogs", serverId, slot] });
@@ -2948,6 +3059,25 @@ function HeadlessLogsPanel({
           </div>
         </CardHeader>
         <CardContent>
+          {!showingLive && archivedMeta?.truncated && (
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
+              <span>
+                Showing {Math.min(archivedMeta.nextOffset, archivedMeta.totalSize).toLocaleString()} of{" "}
+                {archivedMeta.totalSize.toLocaleString()} bytes
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={loadingMore}
+                onClick={() => void loadMoreArchived()}
+              >
+                {loadingMore ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : null}
+                Load more
+              </Button>
+            </div>
+          )}
           <pre
             ref={logRef}
             className="h-[28rem] overflow-auto rounded-md bg-muted/40 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap"

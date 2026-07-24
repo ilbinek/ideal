@@ -337,9 +337,12 @@ export const api = {
 
   // Logs
   listServerLogs: (id: number) => request<LogEntry[]>(`/api/servers/${id}/logs`),
-  getServerLog: (id: number, filename: string, offset?: number) =>
+  getServerLog: (id: number, filename: string, offset?: number, limit?: number) =>
     request<LogContent>(
-      `/api/servers/${id}/logs/${encodeURIComponent(filename)}${offset != null ? `?offset=${offset}` : ""}`,
+      `/api/servers/${id}/logs/${encodeURIComponent(filename)}?${new URLSearchParams({
+        ...(offset != null ? { offset: String(offset) } : {}),
+        ...(limit != null ? { limit: String(limit) } : {}),
+      })}`,
     ),
   deleteServerLog: (id: number, filename: string) =>
     request<{ ok: boolean }>(`/api/servers/${id}/logs/${encodeURIComponent(filename)}`, {
@@ -402,11 +405,12 @@ export const api = {
     }),
   listHeadlessLogs: (id: number, slot: number) =>
     request<LogEntry[]>(`/api/servers/${id}/headless/${slot}/logs`),
-  getHeadlessLog: (id: number, slot: number, filename: string, offset?: number) =>
+  getHeadlessLog: (id: number, slot: number, filename: string, offset?: number, limit?: number) =>
     request<LogContent>(
-      `/api/servers/${id}/headless/${slot}/logs/${encodeURIComponent(filename)}${
-        offset != null ? `?offset=${offset}` : ""
-      }`,
+      `/api/servers/${id}/headless/${slot}/logs/${encodeURIComponent(filename)}?${new URLSearchParams({
+        ...(offset != null ? { offset: String(offset) } : {}),
+        ...(limit != null ? { limit: String(limit) } : {}),
+      })}`,
     ),
   deleteHeadlessLog: (id: number, slot: number, filename: string) =>
     request<{ ok: boolean }>(

@@ -4,7 +4,6 @@ package server
 
 import (
 	"fmt"
-	"io"
 )
 
 const dockerRuntimeImage = "ideal-arma-runtime:local"
@@ -31,11 +30,11 @@ func dockerContainerName(serverID int) string {
 	return fmt.Sprintf("ideal-server-%d", serverID)
 }
 
-func startDockerServer(serverID int, binary string, args []string, workDir string, cpuAffinity string, memoryLimitMB int, extraMounts []string, capture io.Writer) (containerID string, proc *managedProc, err error) {
+func startDockerServer(serverID int, binary string, args []string, workDir, sessionLogPath string, cpuAffinity string, memoryLimitMB int, extraMounts []string) (containerID string, proc *managedProc, err error) {
 	return "", nil, fmt.Errorf("Docker isolation is only supported on Linux")
 }
 
-func execDockerHeadless(serverID int, binary string, args []string, workDir, sessionLogPath string, capture io.Writer) (pid int, proc *managedProc, err error) {
+func execDockerHeadless(serverID int, binary string, args []string, workDir, sessionLogPath string) (pid int, proc *managedProc, err error) {
 	return 0, nil, fmt.Errorf("Docker isolation is only supported on Linux")
 }
 

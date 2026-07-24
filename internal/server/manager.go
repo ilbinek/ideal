@@ -476,10 +476,14 @@ func (m *Manager) Start(serverID int) error {
 		startErr    error
 	)
 	if useDocker {
+		// Close Ideal's write handle so the container can append freely; live
+		// tail and historic reads use the on-disk session file under logs/.
+		_ = sessionLog.Close()
+		sessionLog = nil
 		extraMounts := CollectDockerExtraMounts(serverID)
 		containerID, proc, startErr = startDockerServer(
-			serverID, launch.Binary, launch.Args, launch.WorkingDir,
-			srv.CPUAffinity, srv.MemoryLimitMB, extraMounts, sessionLog,
+			serverID, launch.Binary, launch.Args, launch.WorkingDir, sessionLogPath,
+			srv.CPUAffinity, srv.MemoryLimitMB, extraMounts,
 		)
 	} else {
 		proc, startErr = startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)

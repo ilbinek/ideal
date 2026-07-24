@@ -232,34 +232,37 @@ func OpenLogForDownload(slug, filename string) (*os.File, string, error) {
 }
 
 // ReadLog reads a log file with optional offset and limit.
-// When offset is 0 and the file is larger than the read window, the tail of the
-// file is returned (server logs are most useful from the end) and the read is
-// aligned to the next newline so content does not start mid-line.
-func ReadLog(slug, filename string, offset, limit int64) (content string, totalSize int64, err error) {
+// When limit is 0 a large default window is used. Content is returned from the
+// given offset (from the start of the file), not only the tail, so the UI can
+// show the full log and paginate with larger offsets.
+// contentOffset is the byte offset of the first returned byte (after newline alignment).
+// nextOffset is the file offset after the bytes consumed for this chunk (for Load more).
+func ReadLog(slug, filename string, offset, limit int64) (content string, totalSize, contentOffset, nextOffset int64, err error) {
 	if err := validateLogFilename(filename); err != nil {
-		return "", 0, err
+		return "", 0, 0, 0, err
 	}
 
 	logPath, err := findLogPath(slug, filename)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, 0, err
 	}
 
 	f, err := openLogFile(logPath)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, 0, err
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, 0, err
 	}
 	totalSize = info.Size()
 
+	const defaultLogReadLimit = 32 * 1024 * 1024 // 32 MiB
 	readSize := limit
 	if readSize <= 0 {
-		readSize = 1024 * 1024 // 1 MiB default window
+		readSize = defaultLogReadLimit
 	}
 
 	if offset < 0 {
@@ -268,32 +271,29 @@ func ReadLog(slug, filename string, offset, limit int64) (content string, totalS
 	if offset > totalSize {
 		offset = totalSize
 	}
-
-	// Default open (offset 0): show the end of large logs, not only the first chunk.
-	if offset == 0 && totalSize > readSize {
-		offset = totalSize - readSize
-	}
+	contentOffset = offset
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return "", 0, err
+		return "", 0, 0, 0, err
 	}
 
 	buf := make([]byte, readSize)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
-		return "", totalSize, err
+		return "", totalSize, contentOffset, contentOffset, err
 	}
 	buf = buf[:n]
+	nextOffset = offset + int64(n)
 
 	// If we started mid-file, drop a partial first line.
 	if offset > 0 {
 		if i := bytes.IndexByte(buf, '\n'); i >= 0 && i+1 < len(buf) {
 			buf = buf[i+1:]
-			offset += int64(i + 1)
+			contentOffset += int64(i + 1)
 		}
 	}
 
-	return string(buf), totalSize, nil
+	return string(buf), totalSize, contentOffset, nextOffset, nil
 }
 
 // ResolveRPTPath returns the best RPT file path for tailing.
@@ -310,10 +310,15 @@ func ResolveRPTPath(slug, preferred string) string {
 // FindNewestRPT returns the most recently modified .rpt in the instance.
 func FindNewestRPT(slug string) (string, error) {
 	logs, err := ListLogs(slug)
-	if err != nil || len(logs) == 0 {
+	if err != nil {
 		return "", err
 	}
-	return logs[0].Path, nil
+	for _, entry := range logs {
+		if strings.EqualFold(filepath.Ext(entry.Name), ".rpt") {
+			return entry.Path, nil
+		}
+	}
+	return "", fmt.Errorf("no RPT log found")
 }
 
 // TailLog reads new content from a file starting at offset.
@@ -405,6 +410,9 @@ func WaitForRPT(slug string, after time.Time, timeout time.Duration) (string, er
 		logs, err := ListLogs(slug)
 		if err == nil {
 			for _, entry := range logs {
+				if !strings.EqualFold(filepath.Ext(entry.Name), ".rpt") {
+					continue
+				}
 				if entry.ModTime.After(after) {
 					return entry.Path, nil
 				}
@@ -412,8 +420,8 @@ func WaitForRPT(slug string, after time.Time, timeout time.Duration) (string, er
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	path, _ := FindNewestRPT(slug)
-	if path != "" {
+	path, err := FindNewestRPT(slug)
+	if err == nil && path != "" {
 		return path, nil
 	}
 	return "", fmt.Errorf("timed out waiting for RPT log")

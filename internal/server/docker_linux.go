@@ -148,7 +148,7 @@ func dockerRun(args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-func startDockerServer(serverID int, binary string, args []string, workDir string, cpuAffinity string, memoryLimitMB int, extraMounts []string, capture io.Writer) (containerID string, proc *managedProc, err error) {
+func startDockerServer(serverID int, binary string, args []string, workDir, sessionLogPath string, cpuAffinity string, memoryLimitMB int, extraMounts []string) (containerID string, proc *managedProc, err error) {
 	if err := EnsureDockerRuntimeImage(); err != nil {
 		return "", nil, err
 	}
@@ -168,6 +168,19 @@ func startDockerServer(serverID int, binary string, args []string, workDir strin
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve binary: %w", err)
 	}
+	logAbs, err := filepath.Abs(sessionLogPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve session log: %w", err)
+	}
+
+	// Redirect stdout/stderr into the bind-mounted session log so historic files
+	// survive docker rm (unlike `docker logs`, which disappears with the container).
+	shellCmd := fmt.Sprintf(
+		"exec %s %s >> %s 2>&1",
+		shellQuote(binAbs),
+		shellJoinArgs(args),
+		shellQuote(logAbs),
+	)
 
 	runArgs := []string{
 		"run", "-d",
@@ -190,8 +203,7 @@ func startDockerServer(serverID int, binary string, args []string, workDir strin
 			"--memory-swap", fmt.Sprintf("%dm", memoryLimitMB*2),
 		)
 	}
-	runArgs = append(runArgs, dockerRuntimeImage, binAbs)
-	runArgs = append(runArgs, args...)
+	runArgs = append(runArgs, dockerRuntimeImage, "sh", "-c", shellCmd)
 
 	containerID, err = dockerRun(runArgs...)
 	if err != nil {
@@ -204,11 +216,7 @@ func startDockerServer(serverID int, binary string, args []string, workDir strin
 		return "", nil, fmt.Errorf("container started but PID unavailable: %w", err)
 	}
 
-	proc = watchDockerContainer(name, pid)
-	if capture != nil {
-		go followDockerLogs(name, capture)
-	}
-	return containerID, proc, nil
+	return containerID, watchDockerContainer(name, pid), nil
 }
 
 func uniqueMounts(paths []string, dataRoot string) []string {
@@ -234,13 +242,6 @@ func uniqueMounts(paths []string, dataRoot string) []string {
 		out = append(out, abs)
 	}
 	return out
-}
-
-func followDockerLogs(containerName string, w io.Writer) {
-	cmd := exec.Command("docker", "logs", "-f", "--since", "0s", containerName)
-	cmd.Stdout = w
-	cmd.Stderr = w
-	_ = cmd.Run()
 }
 
 func watchDockerContainer(containerName string, pid int) *managedProc {
@@ -353,7 +354,8 @@ func adoptDockerContainer(serverID int) (containerID string, proc *managedProc, 
 }
 
 // execDockerHeadless starts an HC inside the server's container and returns the host PID when possible.
-func execDockerHeadless(serverID int, binary string, args []string, workDir, sessionLogPath string, capture io.Writer) (pid int, proc *managedProc, err error) {
+// Stdout/stderr are redirected into sessionLogPath on the bind mount (no host-side self-tail).
+func execDockerHeadless(serverID int, binary string, args []string, workDir, sessionLogPath string) (pid int, proc *managedProc, err error) {
 	name := dockerContainerName(serverID)
 	if !dockerContainerRunning(serverID) {
 		return 0, nil, fmt.Errorf("server container %s is not running", name)
@@ -373,9 +375,10 @@ func execDockerHeadless(serverID int, binary string, args []string, workDir, ses
 	}
 	pidFile := logAbs + ".pid"
 
-	// Quote for shell inside the container.
+	// Append so a host-created empty session file keeps its identity; avoid
+	// truncating if Ideal already opened the path.
 	shellCmd := fmt.Sprintf(
-		"cd %s && %s %s > %s 2>&1 & echo $! > %s; cat %s",
+		"cd %s && %s %s >> %s 2>&1 & echo $! > %s; cat %s",
 		shellQuote(workAbs),
 		shellQuote(binAbs),
 		shellJoinArgs(args),
@@ -395,15 +398,10 @@ func execDockerHeadless(serverID int, binary string, args []string, workDir, ses
 
 	hostPID := resolveHostPIDFromContainer(name, innerPID)
 	if hostPID <= 0 {
-		// Fall back to tracking via docker exec kill -0 using inner PID through a poller.
 		hostPID = innerPID
 		proc = watchDockerExecPID(name, innerPID)
 	} else {
 		proc = adoptProcess(hostPID)
-	}
-
-	if capture != nil {
-		go tailFileToWriter(logAbs, capture)
 	}
 	return hostPID, proc, nil
 }
@@ -497,39 +495,6 @@ func nspidsContain(hostPID, innerPID int) bool {
 		}
 	}
 	return false
-}
-
-func tailFileToWriter(path string, w io.Writer) {
-	// Wait briefly for the file to appear, then follow.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	buf := make([]byte, 32*1024)
-	for {
-		n, readErr := f.Read(buf)
-		if n > 0 {
-			_, _ = w.Write(buf[:n])
-		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				time.Sleep(300 * time.Millisecond)
-				continue
-			}
-			return
-		}
-	}
 }
 
 func shellQuote(s string) string {

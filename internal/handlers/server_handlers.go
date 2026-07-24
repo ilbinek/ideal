@@ -226,15 +226,15 @@ func filterServersForPrincipal(servers []database.Server, p *auth.Principal) []d
 
 func CreateServerHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name           string `json:"name"`
-		BranchID       int    `json:"branchId"`
-		ModsetID       *int   `json:"modsetId"`
-		GamePort       int    `json:"gamePort"`
-		SteamPort      int    `json:"steamPort"`
-		ProfileName    string `json:"profileName"`
-		ServerBinary   string `json:"serverBinary"`
-		CPUAffinity    []int  `json:"cpuAffinity"`
-		MemoryLimitMB  int    `json:"memoryLimitMB"`
+		Name          string `json:"name"`
+		BranchID      int    `json:"branchId"`
+		ModsetID      *int   `json:"modsetId"`
+		GamePort      int    `json:"gamePort"`
+		SteamPort     int    `json:"steamPort"`
+		ProfileName   string `json:"profileName"`
+		ServerBinary  string `json:"serverBinary"`
+		CPUAffinity   []int  `json:"cpuAffinity"`
+		MemoryLimitMB int    `json:"memoryLimitMB"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -1039,15 +1039,17 @@ func GetServerLogHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	limit, _ := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64)
-	content, totalSize, err := server.ReadLog(srv.Slug, filename, offset, limit)
+	content, totalSize, contentOffset, nextOffset, err := server.ReadLog(srv.Slug, filename, offset, limit)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"content":   content,
-		"totalSize": totalSize,
-		"offset":    offset,
+		"content":    content,
+		"totalSize":  totalSize,
+		"offset":     contentOffset,
+		"nextOffset": nextOffset,
+		"truncated":  nextOffset < totalSize,
 	})
 }
 

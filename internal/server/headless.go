@@ -236,7 +236,11 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 		pid      int
 	)
 	if parentDocker {
-		pid, proc, startErr = execDockerHeadless(serverID, launch.Binary, launch.Args, launch.WorkingDir, sessionLogPath, sessionLog)
+		// Container appends to the session file; Ideal only needs Sync-on-close
+		// ownership, so release the write handle before docker exec starts.
+		_ = sessionLog.Close()
+		sessionLog = nil
+		pid, proc, startErr = execDockerHeadless(serverID, launch.Binary, launch.Args, launch.WorkingDir, sessionLogPath)
 	} else {
 		proc, startErr = startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
 		if proc != nil {

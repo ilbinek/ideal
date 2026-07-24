@@ -178,15 +178,17 @@ func GetHeadlessLogHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	limit, _ := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64)
-	content, totalSize, err := server.ReadLog(srv.Slug, filename, offset, limit)
+	content, totalSize, contentOffset, nextOffset, err := server.ReadLog(srv.Slug, filename, offset, limit)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"content":   content,
-		"totalSize": totalSize,
-		"offset":    offset,
+		"content":    content,
+		"totalSize":  totalSize,
+		"offset":     contentOffset,
+		"nextOffset": nextOffset,
+		"truncated":  nextOffset < totalSize,
 	})
 }
 

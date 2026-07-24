@@ -61,6 +61,9 @@ func (w *sessionLogWriter) ReadFrom(offset int) (string, int) {
 }
 
 func (w *sessionLogWriter) Close() error {
+	if w == nil {
+		return nil
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.file == nil {

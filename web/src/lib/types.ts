@@ -294,4 +294,6 @@ export interface LogContent {
   content: string;
   totalSize: number;
   offset: number;
+  nextOffset?: number;
+  truncated?: boolean;
 }
