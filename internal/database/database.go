@@ -49,7 +49,7 @@ type Mod struct {
 
 func Init() error {
 	dbPath := filepath.Join(utils.DataRoot(), "arma3mods.db")
-	dsn := dbPath + "?_busy_timeout=10000&_journal_mode=WAL"
+	dsn := dbPath + "?_busy_timeout=10000&_journal_mode=WAL&_foreign_keys=on"
 	var err error
 	db, err = sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -321,6 +321,27 @@ func GetMods(modsetID int) ([]Mod, error) {
 		INNER JOIN modset_mods mm ON m.id = mm.mod_id
 		WHERE mm.modset_id = ?
 		ORDER BY m.name`, modsetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMods(rows)
+}
+
+// GetExclusiveMods returns mods that belong to the given modset and no other modset.
+func GetExclusiveMods(modsetID int) ([]Mod, error) {
+	rows, err := db.Query(`
+		SELECT m.id, m.workshop_id, m.name, m.downloaded, COALESCE(m.local_path, ''),
+		       COALESCE(m.last_updated, ''), COALESCE(m.last_checked, ''), m.update_available,
+		       COALESCE(m.last_notified_updated, 0)
+		FROM mods m
+		INNER JOIN modset_mods mm ON m.id = mm.mod_id
+		WHERE mm.modset_id = ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM modset_mods mm2
+		    WHERE mm2.mod_id = m.id AND mm2.modset_id != ?
+		  )
+		ORDER BY m.name`, modsetID, modsetID)
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -249,12 +250,63 @@ func UploadModsetAPIHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func GetExclusiveModsHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid modset id")
+		return
+	}
+	mods, err := database.GetExclusiveMods(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch exclusive mods")
+		return
+	}
+	if mods == nil {
+		mods = []database.Mod{}
+	}
+	writeJSON(w, http.StatusOK, mods)
+}
+
 func DeleteModsetAPIHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid modset id")
 		return
 	}
+
+	var body struct {
+		DeleteModIDs []int `json:"deleteModIds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	if len(body.DeleteModIDs) > 0 {
+		exclusive, err := database.GetExclusiveMods(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate exclusive mods")
+			return
+		}
+		allowed := make(map[int]bool, len(exclusive))
+		for _, m := range exclusive {
+			allowed[m.ID] = true
+		}
+		for _, modID := range body.DeleteModIDs {
+			if !allowed[modID] {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("mod %d is not exclusive to this modset", modID))
+				return
+			}
+		}
+		for _, modID := range body.DeleteModIDs {
+			if err := deleteModFilesAndRecord(modID); err != nil {
+				log.Printf("[ERROR] Failed to delete exclusive mod %d: %v", modID, err)
+				writeError(w, http.StatusInternalServerError, "failed to delete selected mods")
+				return
+			}
+		}
+	}
+
 	if err := database.DeleteModset(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete modset")
 		return

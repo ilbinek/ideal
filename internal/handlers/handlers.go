@@ -46,6 +46,7 @@ func APIHandler() http.Handler {
 
 	// Modsets — read for server admins (pickers); write for mods role
 	mux.HandleFunc("GET /api/modsets", apiModsRead(GetModsetsHandler))
+	mux.HandleFunc("GET /api/modsets/{id}/exclusive-mods", apiModsRead(GetExclusiveModsHandler))
 	mux.HandleFunc("POST /api/modsets/upload", apiMods(UploadModsetAPIHandler))
 	mux.HandleFunc("PUT /api/modsets/{id}", apiMods(UpdateModsetAPIHandler))
 	mux.HandleFunc("DELETE /api/modsets/{id}", apiMods(DeleteModsetAPIHandler))

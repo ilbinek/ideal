@@ -158,8 +158,13 @@ export const api = {
       { method: "POST", body: form, headers: {} },
     );
   },
-  deleteModset: (id: number) =>
-    request<{ ok: boolean }>(`/api/modsets/${id}`, { method: "DELETE" }),
+  getExclusiveMods: (id: number) =>
+    request<Mod[]>(`/api/modsets/${id}/exclusive-mods`),
+  deleteModset: (id: number, deleteModIds?: number[]) =>
+    request<{ ok: boolean }>(`/api/modsets/${id}`, {
+      method: "DELETE",
+      body: JSON.stringify({ deleteModIds: deleteModIds ?? [] }),
+    }),
   updateModset: (id: number, name: string) =>
     request<{ ok: boolean }>(`/api/modsets/${id}`, {
       method: "PUT",
