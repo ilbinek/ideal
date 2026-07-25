@@ -18,7 +18,7 @@ import { api, ApiError } from "@/lib/api";
 import { patchServerStatus, useServers } from "@/hooks/useServers";
 import { permissionsOf, useSession } from "@/hooks/useSession";
 import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
-import { formatDate, formatBytes, formatCpuPercent, formatBytesPerSec, cpuGaugeFill, memoryGaugeFill, formatMemoryOfHost } from "@/lib/utils";
+import { formatDate, formatBytes, formatCpuPercent, formatBytesPerSec, cpuGaugeFill, memoryGaugeFill, formatMemoryOfHost, copyText } from "@/lib/utils";
 import { HalfCircleGauge } from "@/components/HalfCircleGauge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -816,7 +816,9 @@ function OverviewTab({
               size="sm"
               variant="outline"
               className="mt-2"
-              onClick={() => navigator.clipboard.writeText(launch.data!.command)}
+              onClick={() => {
+                void copyText(launch.data!.command);
+              }}
             >
               <Copy className="size-3.5" /> Copy
             </Button>
@@ -2100,6 +2102,7 @@ function MissionsTab({
   const [drag, setDrag] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState("");
+  const [copyFullUrl, setCopyFullUrl] = useState(true);
 
   const httpServe = useMutation({
     mutationFn: (enabled: boolean) => api.setMissionHttpServe(serverId, enabled),
@@ -2129,6 +2132,8 @@ function MissionsTab({
   });
 
   const missionHttpPath = srv.missionHttpPath || `${srv.slug}/missions/`;
+  const missionHttpUrl = `${window.location.origin}/${missionHttpPath.replace(/^\//, "")}`;
+  const missionHttpCopyValue = copyFullUrl ? missionHttpUrl : missionHttpPath;
 
   const missionNames = useMemo(
     () => new Set((missions.data ?? []).map((m) => m.name)),
@@ -2326,9 +2331,10 @@ function MissionsTab({
           <CardTitle className="text-base">HTTP mission download</CardTitle>
           <CardDescription>
             Serve mission .pbo files over HTTP so Arma clients can download them
-            faster. Set{" "}
+            faster. Paste into{" "}
             <code className="text-xs">missionHTTPDownloadBaseURL</code> in
-            server.cfg yourself — prepend your public address to the path below.
+            server.cfg. Uncheck “Include host” if you use a reverse proxy and
+            only need the path suffix.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -2342,17 +2348,33 @@ function MissionsTab({
             />
             Enable public HTTP mission serving
           </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4 rounded border-input"
+              checked={copyFullUrl}
+              onChange={(e) => setCopyFullUrl(e.target.checked)}
+            />
+            Include host in copied URL
+          </label>
           <div className="flex flex-wrap items-center gap-2">
-            <code className="rounded bg-muted px-2 py-1 text-sm">
-              {missionHttpPath}
+            <code className="rounded bg-muted px-2 py-1 text-sm break-all">
+              {missionHttpCopyValue}
             </code>
             <Button
               type="button"
               size="sm"
               variant="outline"
               onClick={() => {
-                void navigator.clipboard.writeText(missionHttpPath);
-                toast.success("Path copied");
+                void copyText(missionHttpCopyValue)
+                  .then(() =>
+                    toast.success(copyFullUrl ? "URL copied" : "Path copied"),
+                  )
+                  .catch(() =>
+                    toast.error(
+                      copyFullUrl ? "Failed to copy URL" : "Failed to copy path",
+                    ),
+                  );
               }}
             >
               <Copy className="size-3.5" /> Copy
