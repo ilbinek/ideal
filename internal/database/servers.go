@@ -231,8 +231,9 @@ func backfillServerSortOrder() error {
 }
 
 // MissionHttpPath returns the public path suffix for Arma mission HTTP download.
+// Prefixed with "dl/" so server slugs cannot collide with SPA routes (e.g. /servers).
 func MissionHttpPath(slug string) string {
-	return slug + "/missions/"
+	return "dl/" + slug + "/missions/"
 }
 
 func fixPerformanceBranchCode() error {

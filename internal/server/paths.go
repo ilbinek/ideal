@@ -20,6 +20,28 @@ const (
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+// reservedSlugs are SPA top-level path segments and other HTTP prefixes that
+// must not be used as server instance slugs.
+var reservedSlugs = map[string]struct{}{
+	"api":              {},
+	"assets":           {},
+	"branches":         {},
+	"dl":               {},
+	"login":            {},
+	"mods":             {},
+	"modsets":          {},
+	"servers":          {},
+	"settings":         {},
+	"startup-command":  {},
+	"users":            {},
+}
+
+// IsReservedSlug reports whether slug collides with a fixed HTTP path segment.
+func IsReservedSlug(slug string) bool {
+	_, ok := reservedSlugs[slug]
+	return ok
+}
+
 // SlugFromName converts a display name into a filesystem-safe slug.
 func SlugFromName(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
@@ -36,14 +58,17 @@ func InstanceDir(slug string) string {
 	return filepath.Join(utils.DataRoot(), "servers", slug)
 }
 
-// EnsureUniqueSlug appends a numeric suffix if the slug is taken.
+// EnsureUniqueSlug appends a numeric suffix if the slug is taken or reserved.
 func EnsureUniqueSlug(base string, exists func(slug string) bool) string {
-	if !exists(base) {
+	taken := func(s string) bool {
+		return IsReservedSlug(s) || exists(s)
+	}
+	if !taken(base) {
 		return base
 	}
 	for i := 2; i < 1000; i++ {
 		candidate := fmt.Sprintf("%s-%d", base, i)
-		if !exists(candidate) {
+		if !taken(candidate) {
 			return candidate
 		}
 	}

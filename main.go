@@ -4,7 +4,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	"arma3modmanager/internal/auth"
 	"arma3modmanager/internal/config"
@@ -52,18 +51,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Public mission downloads use /{slug}/missions/{name}, which cannot share a
-	// ServeMux with /api/ (Go treats {slug}=api as overlapping). Route them on a
-	// separate mux and only consult it for non-/api/ GET requests.
+	// Public mission downloads live under /dl/ so server slugs cannot collide with
+	// SPA routes (/servers, /login, …) or /api/.
 	missions := http.NewServeMux()
-	missions.HandleFunc("GET /{slug}/missions/{name}", handlers.PublicMissionDownloadHandler)
+	missions.HandleFunc("GET /dl/{slug}/missions/{name}", handlers.PublicMissionDownloadHandler)
 
 	app := http.NewServeMux()
 	app.Handle("/api/", handlers.APIHandler())
 	app.Handle("/", web.Handler())
 
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/") {
+		if r.Method == http.MethodGet {
 			// Handler() only checks a match; ServeHTTP is required so PathValue
 			// wildcards ({slug}, {name}) are populated on the request.
 			if _, pattern := missions.Handler(r); pattern != "" {

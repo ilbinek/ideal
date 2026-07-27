@@ -2131,7 +2131,7 @@ function MissionsTab({
       ),
   });
 
-  const missionHttpPath = srv.missionHttpPath || `${srv.slug}/missions/`;
+  const missionHttpPath = srv.missionHttpPath || `dl/${srv.slug}/missions/`;
   const missionHttpUrl = `${window.location.origin}/${missionHttpPath.replace(/^\//, "")}`;
   const missionHttpCopyValue = copyFullUrl ? missionHttpUrl : missionHttpPath;
 
