@@ -202,7 +202,8 @@ func (m *Manager) worker() {
 // downloadGoSteamBatch downloads every item in batch concurrently over a single
 // built-in Steam session, mapping per-mod progress back onto the queue items.
 func (m *Manager) downloadGoSteamBatch(config *database.Config, batch []*Item) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	sess, err := steam.Default.EnsureSession(ctx, config.Username)
 	if err != nil {

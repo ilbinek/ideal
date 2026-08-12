@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -166,11 +167,11 @@ func (c *Client) Connected() bool {
 func (c *Client) Connect() (*netutil.PortAddr, error) {
 	var server *netutil.PortAddr
 
-	// try to initialize the directory cache
-	if !steamDirectoryCache.IsInitialized() {
-		_ = steamDirectoryCache.Initialize()
-	}
-	if steamDirectoryCache.IsInitialized() {
+	// Refresh the CM list on every connect so a long-lived process does not
+	// keep using a stale directory after Steam rotates servers.
+	if err := steamDirectoryCache.Initialize(); err == nil {
+		server = steamDirectoryCache.GetRandomCM()
+	} else if steamDirectoryCache.IsInitialized() {
 		server = steamDirectoryCache.GetRandomCM()
 	} else {
 		server = GetRandomCM()
@@ -227,14 +228,15 @@ func (c *Client) Disconnect() {
 		c.heartbeat.Stop()
 	}
 	close(c.writeChan)
-	// c.Emit(&DisconnectedEvent{})
 	c.mutex.Unlock()
+	c.Emit(&DisconnectedEvent{})
 }
+
+// ErrNotConnected is returned by Send when the CM connection is down.
+var ErrNotConnected = errors.New("not connected")
 
 // Adds a message to the send queue. Modifications to the given message after
 // writing are not allowed (possible race conditions).
-//
-// Writes to this client when not connected are ignored.
 func (c *Client) Send(msg protocol.IMsg) error {
 
 	// Write directly if the client is in manual mode
@@ -245,7 +247,7 @@ func (c *Client) Send(msg protocol.IMsg) error {
 	c.mutex.Lock()
 	if c.Conn == nil {
 		c.mutex.Unlock()
-		return nil
+		return ErrNotConnected
 	}
 	c.writeChan <- msg
 	c.mutex.Unlock()

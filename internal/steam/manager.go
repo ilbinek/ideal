@@ -1,14 +1,15 @@
 // Package steam owns the process-wide, built-in Steam connection used by the
-// gosteam downloader. It holds a single authenticated session (so we log in
-// once and never relog), drives an interactive login state machine that the web
-// UI can stream over SSE (credentials + Steam Guard 2FA, or QR), and persists a
-// refresh token so future runs resume silently.
+// gosteam downloader. It holds a single authenticated session, reconnects from
+// a cached refresh token when the CM connection dies, drives an interactive
+// login state machine that the web UI can stream over SSE (credentials + Steam
+// Guard 2FA, or QR), and persists a refresh token so future runs resume silently.
 package steam
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sync"
 
@@ -52,6 +53,7 @@ type Manager struct {
 	state     State
 	sess      *client.Session
 	loggingIn bool
+	loginDone chan struct{} // closed when loggingIn becomes false; waiters must copy the ref
 	guardCh   chan string
 	cancel    context.CancelFunc
 
@@ -128,6 +130,7 @@ func (m *Manager) StartLogin(method, username, password string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.loggingIn = true
+	m.loginDone = make(chan struct{})
 	m.guardCh = make(chan string, 1)
 	m.state = State{Phase: PhaseConnecting, Username: username}
 	store := m.store
@@ -140,6 +143,7 @@ func (m *Manager) StartLogin(method, username, password string) error {
 }
 
 func (m *Manager) runLogin(ctx context.Context, store *state.Store, guardCh chan string, method, username, password string) {
+	holder := &sessionRef{}
 	opts := client.Options{
 		Username: username,
 		Password: password,
@@ -157,12 +161,16 @@ func (m *Manager) runLogin(ctx context.Context, store *state.Store, guardCh chan
 		OnChallengeURL: func(url string) {
 			m.setState(State{Phase: PhaseQRChallenge, ChallengeURL: url})
 		},
+		OnDisconnected: func() {
+			m.onSessionDisconnected(holder.sess)
+		},
 	}
 
 	sess, err := client.Login(ctx, opts)
+	holder.sess = sess
 
 	m.mu.Lock()
-	m.loggingIn = false
+	m.finishLoginLocked()
 	m.cancel = nil
 	m.guardCh = nil
 	if err != nil {
@@ -170,8 +178,6 @@ func (m *Manager) runLogin(ctx context.Context, store *state.Store, guardCh chan
 		m.state = State{Phase: PhaseError, Username: username, Error: err.Error()}
 	} else {
 		m.sess = sess
-		// Prefer the explicit username; fall back to the account name Steam
-		// reported (e.g. for QR logins where the UI never supplied one).
 		name := username
 		m.state = State{Phase: PhaseLoggedIn, Username: name}
 	}
@@ -222,48 +228,110 @@ func (m *Manager) Logout() {
 	m.broadcast()
 }
 
-// EnsureSession returns the live session, silently resuming from a cached
-// refresh token for username if there is no live session yet. It never prompts:
-// if no token is cached (or the resume fails) it returns an error so the caller
-// can ask the user to log in interactively.
+// EnsureSession returns a live session, silently resuming from a cached
+// refresh token for username if there is no live session (or the previous CM
+// connection has died). It never prompts: if no token is cached (or the resume
+// fails) it returns an error so the caller can ask the user to log in
+// interactively.
 func (m *Manager) EnsureSession(ctx context.Context, username string) (*client.Session, error) {
-	m.mu.Lock()
-	if m.sess != nil {
-		sess := m.sess
+	for {
+		m.mu.Lock()
+		if m.sess != nil && !m.sess.Alive() {
+			log.Printf("[STEAM] session dead, resuming from refresh token")
+			dead := m.sess
+			m.sess = nil
+			m.mu.Unlock()
+			dead.Close()
+			continue
+		}
+		if m.sess != nil {
+			sess := m.sess
+			m.mu.Unlock()
+			return sess, nil
+		}
+		if m.loggingIn {
+			wait := m.loginDone
+			m.mu.Unlock()
+			if wait == nil {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-wait:
+			}
+			continue
+		}
+		if m.store == nil {
+			m.mu.Unlock()
+			return nil, errors.New("steam store not initialized")
+		}
+		if username == "" {
+			m.mu.Unlock()
+			return nil, errors.New("no Steam username configured")
+		}
+		if _, ok := m.store.Token(username); !ok {
+			m.mu.Unlock()
+			return nil, errors.New("not logged in to Steam — log in from Settings")
+		}
+		store := m.store
+		m.loggingIn = true
+		m.loginDone = make(chan struct{})
 		m.mu.Unlock()
+
+		log.Printf("[STEAM] resuming session from refresh token")
+		holder := &sessionRef{}
+		sess, err := resumeLogin(ctx, client.Options{
+			Username: username,
+			Store:    store,
+			OnDisconnected: func() {
+				m.onSessionDisconnected(holder.sess)
+			},
+		})
+		holder.sess = sess
+
+		m.mu.Lock()
+		m.finishLoginLocked()
+		if err != nil {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("steam session expired — log in again: %w", err)
+		}
+		m.sess = sess
+		m.state = State{Phase: PhaseLoggedIn, Username: username}
+		m.mu.Unlock()
+		m.broadcast()
 		return sess, nil
 	}
-	if m.store == nil {
-		m.mu.Unlock()
-		return nil, errors.New("steam store not initialized")
-	}
-	if m.loggingIn {
-		m.mu.Unlock()
-		return nil, errors.New("a login is already in progress")
-	}
-	if username == "" {
-		m.mu.Unlock()
-		return nil, errors.New("no Steam username configured")
-	}
-	if _, ok := m.store.Token(username); !ok {
-		m.mu.Unlock()
-		return nil, errors.New("not logged in to Steam — log in from Settings")
-	}
-	store := m.store
-	m.mu.Unlock()
+}
 
-	// Resume using only the cached token (no password, no Guard prompt).
-	sess, err := client.Login(ctx, client.Options{Username: username, Store: store})
-	if err != nil {
-		return nil, fmt.Errorf("steam session expired — log in again: %w", err)
-	}
+// resumeLogin is client.Login; tests replace it to avoid a real Steam CM.
+var resumeLogin = client.Login
 
+type sessionRef struct {
+	sess *client.Session
+}
+
+func (m *Manager) finishLoginLocked() {
+	m.loggingIn = false
+	if m.loginDone != nil {
+		close(m.loginDone)
+		m.loginDone = nil
+	}
+}
+
+func (m *Manager) onSessionDisconnected(sess *client.Session) {
+	if sess == nil {
+		return
+	}
 	m.mu.Lock()
-	m.sess = sess
-	m.state = State{Phase: PhaseLoggedIn, Username: username}
+	dropped := m.sess == sess
+	if dropped {
+		m.sess = nil
+	}
 	m.mu.Unlock()
-	m.broadcast()
-	return sess, nil
+	if dropped {
+		log.Printf("[STEAM] steam connection lost")
+	}
 }
 
 func (m *Manager) setState(s State) {

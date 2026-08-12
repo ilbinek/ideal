@@ -41,7 +41,7 @@ type Response struct {
 func (sd *steamDirectory) Initialize() error {
 	sd.Lock()
 	defer sd.Unlock()
-	client := new(http.Client)
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get("https://api.steampowered.com/ISteamDirectory/GetCMList/v1/?cellId=0")
 	if err != nil {
 		return err
@@ -74,5 +74,7 @@ func (sd *steamDirectory) GetRandomCM() *netutil.PortAddr {
 }
 
 func (sd *steamDirectory) IsInitialized() bool {
+	sd.RLock()
+	defer sd.RUnlock()
 	return sd.isInitialized
 }

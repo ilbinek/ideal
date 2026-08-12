@@ -79,7 +79,8 @@ func GetModDetails(workshopIDs []string, apiKey string) ([]struct {
 
 	fullURL := baseURL + "?" + params.Encode()
 
-	resp, err := http.Get(fullURL)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(fullURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call Steam API: %w", err)
 	}

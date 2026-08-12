@@ -172,7 +172,8 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	go func() {
 		defer close(progressChan)
 		if useGoSteam {
-			ctx := context.Background()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			username := config.Username
 			if username == "" {
 				username = steam.Default.Status().Username

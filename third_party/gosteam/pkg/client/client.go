@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	steam "github.com/0xAozora/go-steam"
 	"github.com/0xAozora/go-steam/protocol/protobuf"
@@ -58,6 +59,10 @@ type Options struct {
 	// OnChallengeURL receives the QR challenge URL (and any rotations) during QR
 	// login. If nil, the URL is printed to stdout.
 	OnChallengeURL func(url string)
+
+	// OnDisconnected is called at most once when the CM connection dies or
+	// Steam logs the session off. It is invoked from a background goroutine.
+	OnDisconnected func()
 }
 
 // Session is an authenticated, connected Steam client. It keeps the underlying
@@ -67,6 +72,10 @@ type Session struct {
 	steamID uint64
 	cellID  uint32
 	done    chan struct{}
+
+	onDisconnected   func()
+	disconnectedOnce sync.Once
+	closeOnce        sync.Once
 }
 
 // Steam returns the underlying go-steam client for use by content packages.
@@ -78,14 +87,27 @@ func (s *Session) SteamID() uint64 { return s.steamID }
 // CellID returns the cell id Steam assigned at logon, used to pick nearby CDN servers.
 func (s *Session) CellID() uint32 { return s.cellID }
 
-// Close logs off and disconnects.
-func (s *Session) Close() {
-	select {
-	case <-s.done:
-	default:
-		close(s.done)
+// Alive reports whether the CM TCP connection is currently up. A nil Session
+// is not alive. Logged-off sessions are closed so this becomes false.
+func (s *Session) Alive() bool {
+	if s == nil || s.sc == nil {
+		return false
 	}
-	s.sc.Disconnect()
+	return s.sc.Connected()
+}
+
+// Close logs off and disconnects. It is safe to call concurrently and repeatedly.
+func (s *Session) Close() {
+	if s == nil {
+		return
+	}
+	s.closeOnce.Do(func() {
+		close(s.done)
+		if s.sc != nil {
+			s.sc.Disconnect()
+		}
+		s.notifyDisconnected()
+	})
 }
 
 // Login connects to Steam, authenticates per opts, and returns a live Session.
@@ -185,20 +207,46 @@ func newSession(sc *steam.Client, opts Options, steamID uint64, cellID uint32) *
 		}
 	}
 
-	s := &Session{sc: sc, steamID: steamID, cellID: cellID, done: make(chan struct{})}
+	s := &Session{
+		sc:             sc,
+		steamID:        steamID,
+		cellID:         cellID,
+		done:           make(chan struct{}),
+		onDisconnected: opts.OnDisconnected,
+	}
 	go s.drainEvents()
 	return s
 }
 
+func (s *Session) notifyDisconnected() {
+	s.disconnectedOnce.Do(func() {
+		if s.onDisconnected == nil {
+			return
+		}
+		go s.onDisconnected()
+	})
+}
+
 // drainEvents keeps consuming the event channel so the read loop never blocks.
+// Disconnect / logoff / fatal errors drop the session so callers can reconnect.
 func (s *Session) drainEvents() {
 	for {
 		select {
 		case <-s.done:
 			return
-		case <-s.sc.Events():
+		case ev := <-s.sc.Events():
+			switch ev.(type) {
+			case steam.FatalErrorEvent, *steam.DisconnectedEvent, *steam.LoggedOffEvent:
+				s.Close()
+				return
+			}
 		}
 	}
+}
+
+// UnconnectedSession returns a Session with no CM connection. For tests.
+func UnconnectedSession() *Session {
+	return &Session{sc: steam.NewClient(), done: make(chan struct{})}
 }
 
 // guardAuth adapts a user Guard callback to the fork's Authenticator interface.

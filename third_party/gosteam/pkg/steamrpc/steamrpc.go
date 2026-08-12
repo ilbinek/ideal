@@ -5,12 +5,18 @@ package steamrpc
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	steam "github.com/0xAozora/go-steam"
 	"github.com/0xAozora/go-steam/protocol"
 	"github.com/0xAozora/go-steam/protocol/steamlang"
 	"google.golang.org/protobuf/proto"
 )
+
+// DefaultCallTimeout is used when Call's context has no deadline, so a dead
+// CM connection cannot block a download forever.
+const DefaultCallTimeout = 60 * time.Second
 
 // Call sends a job-based request to Steam over the CM connection and waits for
 // the matching response, unmarshalling it into resp.
@@ -21,6 +27,18 @@ import (
 // EMsg and an empty jobName. Responses are correlated by source/target job id,
 // which the fork's read loop dispatches via its JobHandlers map.
 func Call(ctx context.Context, sc *steam.Client, reqEMsg steamlang.EMsg, jobName string, req, resp proto.Message) error {
+	if sc == nil || !sc.Connected() {
+		return fmt.Errorf("steamrpc: not connected")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultCallTimeout)
+		defer cancel()
+	}
+
 	msg := protocol.NewClientMsgProtobuf(reqEMsg, req)
 	if jobName != "" {
 		msg.Header.Proto.TargetJobName = &jobName
