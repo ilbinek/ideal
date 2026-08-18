@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"os"
 	"path/filepath"
+	gosync "sync"
 	"sync/atomic"
 	"testing"
 
@@ -147,5 +148,41 @@ func TestSyncVerifyAllRepairsCorruption(t *testing.T) {
 	}
 	if got := read(t, dir, "a.txt"); !bytes.Equal(got, append(append([]byte{}, A...), B...)) {
 		t.Fatal("a.txt not repaired by verify-all")
+	}
+}
+
+func TestSyncConcurrentSameFile(t *testing.T) {
+	dir := t.TempDir()
+	A := bytes.Repeat([]byte("A"), 256)
+	B := bytes.Repeat([]byte("B"), 256)
+
+	cdn := &fakeCDN{data: map[string][]byte{}}
+	syncer := NewSyncer(cdn, Options{MaxDownloads: 4})
+	m1 := &manifest.Manifest{DepotID: 1, GID: 1, Files: []manifest.File{mkFile(cdn, "a.txt", A)}}
+	m2 := &manifest.Manifest{DepotID: 2, GID: 2, Files: []manifest.File{mkFile(cdn, "a.txt", B)}}
+
+	errc := make(chan error, 2)
+	var wg gosync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := syncer.Sync(context.Background(), Target{New: m1, OutDir: dir})
+		errc <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := syncer.Sync(context.Background(), Target{New: m2, OutDir: dir})
+		errc <- err
+	}()
+	wg.Wait()
+	close(errc)
+	for err := range errc {
+		if err != nil {
+			t.Fatalf("concurrent sync: %v", err)
+		}
+	}
+	got := read(t, dir, "a.txt")
+	if !bytes.Equal(got, A) && !bytes.Equal(got, B) {
+		t.Fatalf("a.txt content %q is neither depot's payload", got)
 	}
 }

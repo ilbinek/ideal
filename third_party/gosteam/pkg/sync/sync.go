@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	gosync "sync"
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
@@ -75,11 +76,20 @@ func (r *reporter) add(n uint64) {
 	}
 }
 
+// fileLock is a refcounted mutex so concurrent Sync calls on the same Syncer
+// cannot finalize or prune the same output path at once.
+type fileLock struct {
+	mu   gosync.Mutex
+	refs int
+}
+
 // Syncer applies manifests to disk using a download worker pool.
 type Syncer struct {
-	cdn  ChunkDownloader
-	sem  chan struct{}
-	opts Options
+	cdn   ChunkDownloader
+	sem   chan struct{}
+	opts  Options
+	mu    gosync.Mutex
+	locks map[string]*fileLock
 }
 
 // NewSyncer creates a Syncer. A shared Syncer can be used across multiple Sync
@@ -88,7 +98,34 @@ func NewSyncer(d ChunkDownloader, opts Options) *Syncer {
 	if opts.MaxDownloads <= 0 {
 		opts.MaxDownloads = 8
 	}
-	return &Syncer{cdn: d, sem: make(chan struct{}, opts.MaxDownloads), opts: opts}
+	return &Syncer{
+		cdn:   d,
+		sem:   make(chan struct{}, opts.MaxDownloads),
+		opts:  opts,
+		locks: make(map[string]*fileLock),
+	}
+}
+
+func (s *Syncer) lockPath(path string) func() {
+	key := filepath.Clean(path)
+	s.mu.Lock()
+	l, ok := s.locks[key]
+	if !ok {
+		l = &fileLock{}
+		s.locks[key] = l
+	}
+	l.refs++
+	s.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(s.locks, key)
+		}
+		s.mu.Unlock()
+	}
 }
 
 // Sync installs t.New into t.OutDir, reusing data from existing files and from
@@ -134,6 +171,8 @@ func (s *Syncer) syncFile(ctx context.Context, t Target, nf, of *manifest.File, 
 	if nf.IsDirectory() {
 		return os.MkdirAll(target, 0o755)
 	}
+	unlock := s.lockPath(target)
+	defer unlock()
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
@@ -159,12 +198,12 @@ func (s *Syncer) syncFile(ctx context.Context, t Target, nf, of *manifest.File, 
 		return nil
 	}
 
-	// Stage into a sibling temp file so the final rename stays on one filesystem.
-	stagePath := target + ".gosteam.part"
-	stage, err := os.Create(stagePath)
+	// Unique sibling temp so concurrent depots cannot share a .part path.
+	stage, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".gosteam.part.*")
 	if err != nil {
 		return err
 	}
+	stagePath := stage.Name()
 	defer func() { _ = os.Remove(stagePath) }() // no-op after a successful rename
 	if nf.Size > 0 {
 		if err := stage.Truncate(int64(nf.Size)); err != nil {
@@ -241,7 +280,7 @@ schedule:
 	// os.Rename won't overwrite on Windows, so remove the target first.
 	_ = os.Remove(target)
 	if err := os.Rename(stagePath, target); err != nil {
-		return fmt.Errorf("sync: finalize %s: %w", nf.Name, err)
+		return finalizeRenameError(nf.Name, stagePath, target, err)
 	}
 	if nf.Flags&manifest.FlagExecutable != 0 {
 		_ = os.Chmod(target, 0o755)
@@ -250,14 +289,35 @@ schedule:
 	return nil
 }
 
+func finalizeRenameError(name, stagePath, target string, err error) error {
+	src := pathStatus(stagePath)
+	dst := pathStatus(target)
+	parent := pathStatus(filepath.Dir(target))
+	return fmt.Errorf("sync: finalize %s: %w (src=%s dest=%s parent=%s)", name, err, src, dst, parent)
+}
+
+func pathStatus(p string) string {
+	if _, err := os.Lstat(p); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
 func (s *Syncer) prune(t Target, st *Stats) error {
 	for _, name := range prunable(t.New, t.Old) {
 		path := filepath.Join(t.OutDir, filepath.FromSlash(name))
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("sync: prune %s: %w", name, err)
+		if err := func() error {
+			unlock := s.lockPath(path)
+			defer unlock()
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("sync: prune %s: %w", name, err)
+			}
+			st.FilesDeleted++
+			removeEmptyParents(filepath.Dir(path), t.OutDir)
+			return nil
+		}(); err != nil {
+			return err
 		}
-		st.FilesDeleted++
-		removeEmptyParents(filepath.Dir(path), t.OutDir)
 	}
 	return nil
 }

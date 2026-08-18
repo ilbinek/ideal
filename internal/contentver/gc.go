@@ -18,6 +18,10 @@ func GCModOrphans(modID int, workshopID string) {
 		if g.IsCurrent {
 			continue
 		}
+		if modGenerationProtected(modID, g.Generation) {
+			log.Printf("[CONTENTVER] skipping GC of in-progress mod %s generation %d", workshopID, g.Generation)
+			continue
+		}
 		n, err := database.GenerationRefCount(database.ContentKindMod, modID, g.Generation)
 		if err != nil || n > 0 {
 			continue
@@ -38,6 +42,10 @@ func GCBranchOrphans(branchID int, installPath string) {
 	}
 	for _, g := range gens {
 		if g.IsCurrent {
+			continue
+		}
+		if branchGenerationProtected(branchID, g.Generation) {
+			log.Printf("[CONTENTVER] skipping GC of in-progress branch %d generation %d", branchID, g.Generation)
 			continue
 		}
 		n, err := database.GenerationRefCount(database.ContentKindBranch, branchID, g.Generation)
@@ -87,6 +95,10 @@ func GCAllOrphans() {
 		log.Printf("[CONTENTVER] list orphan mods: %v", err)
 	} else {
 		for _, g := range mods {
+			if modGenerationProtected(g.ModID, g.Generation) {
+				log.Printf("[CONTENTVER] skipping startup GC of in-progress mod %d generation %d", g.ModID, g.Generation)
+				continue
+			}
 			mod, err := database.GetMod(g.ModID)
 			if err != nil || mod == nil {
 				_ = database.DeleteModGeneration(g.ModID, g.Generation)
@@ -105,6 +117,10 @@ func GCAllOrphans() {
 		return
 	}
 	for _, g := range branches {
+		if branchGenerationProtected(g.BranchID, g.Generation) {
+			log.Printf("[CONTENTVER] skipping startup GC of in-progress branch %d generation %d", g.BranchID, g.Generation)
+			continue
+		}
 		branch, err := database.GetBranch(g.BranchID)
 		if err != nil || branch == nil {
 			_ = database.DeleteBranchGeneration(g.BranchID, g.Generation)

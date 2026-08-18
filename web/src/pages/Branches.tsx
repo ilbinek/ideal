@@ -87,7 +87,9 @@ export function Branches() {
       {(installSnap.installing || !!installSnap.error) && (
         <Card>
           <CardContent className="flex flex-col gap-2 pt-6">
-            <p className="text-sm">{installSnap.message || (installSnap.error ? "Install failed" : "")}</p>
+            {installSnap.message && installSnap.message !== installSnap.error && (
+              <p className="text-sm">{installSnap.message}</p>
+            )}
             {installSnap.installing && <Progress value={installSnap.percentage} />}
             {installSnap.error && (
               <p className="text-sm text-destructive">{installSnap.error}</p>

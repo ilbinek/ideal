@@ -108,11 +108,12 @@ func AppUpdateGoSteam(
 	}
 
 	ad, err := downloader.NewApp(ctx, sess, store, downloader.AppConfig{
-		AppID:     appID,
-		Branch:    opts.SteamBranch,
-		OutDir:    installDir,
-		Prune:     true,
-		VerifyAll: opts.VerifyAll,
+		AppID:             appID,
+		Branch:            opts.SteamBranch,
+		OutDir:            installDir,
+		Prune:             true,
+		VerifyAll:         opts.VerifyAll,
+		MaxConcurrentDeps: 1,
 		OnProgress: func(p downloader.AppProgress) {
 			key := downloader.FormatDepotKey(p.Depot)
 			progMu.Lock()

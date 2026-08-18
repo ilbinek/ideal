@@ -48,11 +48,13 @@ func PrepareBranchInstall(branchID int, installPath string) (contentDir string, 
 	if err := database.UpsertBranchGeneration(branchID, generation, rel, "", false); err != nil {
 		return "", 0, err
 	}
+	ProtectBranchGeneration(branchID, generation)
 	return contentDir, generation, nil
 }
 
 // AbortBranchInstall removes a failed non-current generation.
 func AbortBranchInstall(branchID int, installPath string, generation int) {
+	defer UnprotectBranchGeneration(branchID, generation)
 	cur, err := database.GetCurrentBranchGeneration(branchID)
 	if err != nil || (cur != nil && cur.Generation == generation) {
 		return
@@ -63,6 +65,7 @@ func AbortBranchInstall(branchID int, installPath string, generation int) {
 
 // FinalizeBranchInstall marks the generation current and updates the branch row.
 func FinalizeBranchInstall(branchID int, installPath string, generation int, buildID string) error {
+	defer UnprotectBranchGeneration(branchID, generation)
 	contentDir := BranchGenerationDir(installPath, generation)
 	if _, err := os.Stat(contentDir); err != nil {
 		return fmt.Errorf("branch generation missing after install: %w", err)

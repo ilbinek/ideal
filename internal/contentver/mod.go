@@ -52,11 +52,13 @@ func PrepareModDownload(modID int, workshopID string) (generation int, err error
 	if err := LinkStagingTarget(workshopID, ModGenerationDir(workshopID, generation)); err != nil {
 		return 0, fmt.Errorf("staging symlink: %w", err)
 	}
+	ProtectModGeneration(modID, generation)
 	return generation, nil
 }
 
 // AbortModDownload removes a failed non-current generation and clears staging.
 func AbortModDownload(modID int, workshopID string, generation int) {
+	defer UnprotectModGeneration(modID, generation)
 	ClearStaging(workshopID)
 	cur, err := database.GetCurrentModGeneration(modID)
 	if err != nil || (cur != nil && cur.Generation == generation) {
@@ -74,6 +76,7 @@ func AbortModDownload(modID int, workshopID string, generation int) {
 // SteamCMD / DepotDownloader RemoveAll the staging path and recreate it as a
 // real directory — in that case we replace the generation dir with staging.
 func FinalizeModDownload(modID int, workshopID string, generation int) error {
+	defer UnprotectModGeneration(modID, generation)
 	defer ClearStaging(workshopID)
 
 	genDir := ModGenerationDir(workshopID, generation)
