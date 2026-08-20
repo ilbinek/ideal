@@ -122,6 +122,12 @@ func (d *AppDownloader) Resolve(ctx context.Context) ([]app.Depot, error) {
 	})
 }
 
+// BranchBuildID returns the Steam buildid for the configured branch from
+// cached PICS appinfo (populated by Resolve).
+func (d *AppDownloader) BranchBuildID() string {
+	return d.resolver.BranchBuildID(d.cfg.AppID, d.cfg.Branch)
+}
+
 // Download resolves and downloads the app's depots concurrently into OutDir.
 func (d *AppDownloader) Download(ctx context.Context) ([]AppResult, error) {
 	depots, err := d.Resolve(ctx)

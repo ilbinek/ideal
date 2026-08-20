@@ -168,7 +168,11 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	}
 
 	progressChan := make(chan depot.ProgressUpdate, 100)
-	installDone := make(chan error, 1)
+	type installOutcome struct {
+		err     error
+		buildID string
+	}
+	installDone := make(chan installOutcome, 1)
 	go func() {
 		defer close(progressChan)
 		if useGoSteam {
@@ -180,25 +184,26 @@ func (b *BranchInstaller) runInstall(branchID int) {
 			}
 			sess, err := steam.Default.EnsureSession(ctx, username)
 			if err != nil {
-				installDone <- err
+				installDone <- installOutcome{err: err}
 				return
 			}
-			installDone <- depot.AppUpdateGoSteam(ctx, sess, steam.Default.Store(), depot.AppUpdateGoSteamOptions{
+			buildID, err := depot.AppUpdateGoSteam(ctx, sess, steam.Default.Store(), depot.AppUpdateGoSteamOptions{
 				AppID:       depot.DedicatedServerAppIDNum,
 				SteamBranch: branch.SteamBranch,
 				InstallDir:  installDirAbs,
 				VerifyAll:   verifyAll,
 			}, progressChan)
+			installDone <- installOutcome{err: err, buildID: buildID}
 			return
 		}
-		installDone <- depot.AppUpdate(depot.AppUpdateOptions{
+		installDone <- installOutcome{err: depot.AppUpdate(depot.AppUpdateOptions{
 			AppID:        depot.DedicatedServerAppID,
 			SteamBranch:  branch.SteamBranch,
 			InstallDir:   installDirAbs,
 			Username:     config.Username,
 			Password:     config.Password,
 			SteamCmdPath: config.SteamCmdPath,
-		}, progressChan)
+		}, progressChan)}
 	}()
 
 	for update := range progressChan {
@@ -216,12 +221,12 @@ func (b *BranchInstaller) runInstall(branchID int) {
 		b.broadcast()
 	}
 
-	installErr := <-installDone
-	if installErr != nil {
+	outcome := <-installDone
+	if outcome.err != nil {
 		contentver.AbortBranchInstall(branchID, branch.InstallPath, generation)
 		// Prefer the real download/update failure even if an older server binary
 		// is still on disk (e.g. CDN HTTP 503 mid-update).
-		b.setError(installErr.Error())
+		b.setError(outcome.err.Error())
 		return
 	}
 
@@ -241,6 +246,12 @@ func (b *BranchInstaller) runInstall(branchID int) {
 	log.Printf("[BRANCH] install complete — game files at %s", gameDir)
 	utils.EnsureDedicatedServerBinariesExecutable(installDir)
 	buildID := depot.ReadInstalledBuildID(installDir)
+	if buildID == "" {
+		buildID = outcome.buildID
+		if buildID != "" {
+			log.Printf("[BRANCH] using gosteam appinfo build ID %s for branch %q", buildID, branch.Name)
+		}
+	}
 	if buildID == "" {
 		// gosteam does not write appmanifest_*.acf; fall back to the remote build ID
 		// so update checks can detect the next release.

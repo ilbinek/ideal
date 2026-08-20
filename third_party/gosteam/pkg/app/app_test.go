@@ -130,3 +130,36 @@ func TestFindDepotsRootAndFiltersFromFixture(t *testing.T) {
 		t.Fatalf("profiling gid = %d", g)
 	}
 }
+
+func TestBranchBuildID(t *testing.T) {
+	src := []byte(`
+"appinfo"
+{
+	"depots"
+	{
+		"branches"
+		{
+			"public" { "buildid" "1" }
+			"profiling" { "buildid" "2" }
+		}
+	}
+}
+`)
+	tree, err := vdf.ParseText(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Resolver{appInfo: map[uint32]map[string]any{233780: tree}}
+	if g := r.BranchBuildID(233780, "profiling"); g != "2" {
+		t.Fatalf("profiling buildid = %q, want 2", g)
+	}
+	if g := r.BranchBuildID(233780, ""); g != "1" {
+		t.Fatalf("public buildid = %q, want 1", g)
+	}
+	if g := r.BranchBuildID(233780, "missing"); g != "" {
+		t.Fatalf("missing branch buildid = %q, want empty", g)
+	}
+	if g := r.BranchBuildID(1, "public"); g != "" {
+		t.Fatalf("unknown app buildid = %q, want empty", g)
+	}
+}

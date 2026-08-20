@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Loader2, Plus, Trash2 } from "lucide-react";
+import { Download, Loader2, Plus, RotateCw, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useBranchInstall } from "@/hooks/useServerLogs";
@@ -140,12 +140,20 @@ export function Branches() {
                       <div className="flex justify-end gap-2">
                         <Button
                           size="sm"
-                          variant="outline"
+                          variant={b.installed && !b.updateAvailable ? "outline" : "default"}
                           disabled={install.isPending || installSnap.installing}
                           onClick={() => install.mutate(b.id)}
                         >
-                          <Download className="size-3.5" />
-                          {b.installed ? "Update" : "Install"}
+                          {b.installed ? (
+                            <RotateCw className="size-3.5" />
+                          ) : (
+                            <Download className="size-3.5" />
+                          )}
+                          {!b.installed
+                            ? "Install"
+                            : b.updateAvailable
+                              ? "Update"
+                              : "Redownload"}
                         </Button>
                         <Button
                           size="sm"

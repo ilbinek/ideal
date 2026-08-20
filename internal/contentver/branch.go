@@ -78,6 +78,9 @@ func FinalizeBranchInstall(branchID int, installPath string, generation int, bui
 	if err := database.SetBranchInstalled(branchID, true, buildID); err != nil {
 		return err
 	}
+	if err := database.UpdateBranchChecked(branchID, false); err != nil {
+		return err
+	}
 	GCBranchOrphans(branchID, installPath)
 	return nil
 }

@@ -32,14 +32,15 @@ type AppUpdateGoSteamOptions struct {
 
 // AppUpdateGoSteam installs or updates a Steam app via the built-in gosteam
 // library (delta-patched into InstallDir), streaming progress suitable for the
-// branch-install SSE UI.
+// branch-install SSE UI. On success it returns the Steam branch buildid from
+// PICS appinfo (empty if unknown).
 func AppUpdateGoSteam(
 	ctx context.Context,
 	sess *client.Session,
 	store *state.Store,
 	opts AppUpdateGoSteamOptions,
 	progressChan chan<- ProgressUpdate,
-) error {
+) (string, error) {
 	appID := opts.AppID
 	if appID == 0 {
 		appID = DedicatedServerAppIDNum
@@ -159,25 +160,25 @@ func AppUpdateGoSteam(
 	})
 	if err != nil {
 		send(ProgressUpdate{Stage: "error", Message: err.Error(), Error: err})
-		return fmt.Errorf("init gosteam app downloader: %w", err)
+		return "", fmt.Errorf("init gosteam app downloader: %w", err)
 	}
 
 	depots, err := ad.Resolve(ctx)
 	if err != nil {
 		send(ProgressUpdate{Stage: "error", Message: err.Error(), Error: err})
-		return fmt.Errorf("gosteam app resolve: %w", err)
+		return "", fmt.Errorf("gosteam app resolve: %w", err)
 	}
 	if len(depots) == 0 {
 		msg := "no depots resolved for app"
 		send(ProgressUpdate{Stage: "error", Message: msg})
-		return fmt.Errorf("%s", msg)
+		return "", fmt.Errorf("%s", msg)
 	}
 
 	send(ProgressUpdate{Stage: "connecting", Message: "Measuring depot sizes...", Percentage: 5})
 	sizes, err := measureDepotSizes(ctx, sess, store, depots)
 	if err != nil {
 		send(ProgressUpdate{Stage: "error", Message: err.Error(), Error: err})
-		return fmt.Errorf("gosteam measure depots: %w", err)
+		return "", fmt.Errorf("gosteam measure depots: %w", err)
 	}
 
 	progMu.Lock()
@@ -206,7 +207,7 @@ func AppUpdateGoSteam(
 	if firstErr != nil {
 		msg := firstErr.Error()
 		send(ProgressUpdate{Stage: "error", Message: msg, Error: firstErr})
-		return fmt.Errorf("gosteam app update failed: %w", firstErr)
+		return "", fmt.Errorf("gosteam app update failed: %w", firstErr)
 	}
 
 	if !dedicatedServerInstalled(installDir) {
@@ -217,11 +218,11 @@ func AppUpdateGoSteam(
 			msg += fmt.Sprintf(" (game dir checked: %s)", gameDir)
 		}
 		send(ProgressUpdate{Stage: "error", Message: msg})
-		return fmt.Errorf("%s", msg)
+		return "", fmt.Errorf("%s", msg)
 	}
 
 	send(ProgressUpdate{Stage: "complete", Message: "Install complete", Percentage: 100})
-	return nil
+	return ad.BranchBuildID(), nil
 }
 
 // measureDepotSizes downloads each depot's manifest and returns per-depot

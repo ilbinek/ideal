@@ -195,6 +195,25 @@ func (r *Resolver) Resolve(ctx context.Context, opts ResolveOptions) ([]Depot, e
 	return out, nil
 }
 
+// BranchBuildID returns the Steam buildid for branch from cached PICS appinfo,
+// or "" if appinfo has not been resolved yet or the branch is missing.
+func (r *Resolver) BranchBuildID(appID uint32, branch string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if branch == "" {
+		branch = DefaultBranch
+	}
+	tree := r.appInfo[appID]
+	if tree == nil {
+		return ""
+	}
+	sec := vdf.Child(vdf.Child(findDepotsRoot(tree), "branches"), branch)
+	if s, ok := vdf.String(sec, "buildid"); ok {
+		return s
+	}
+	return ""
+}
+
 // BranchPasswordHash returns the hex-encoded beta password for branch, if known
 // from a prior CheckAppBetaPassword (for CDN manifest request codes).
 func (r *Resolver) BranchPasswordHash(branch string) string {
