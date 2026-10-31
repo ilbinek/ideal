@@ -665,6 +665,7 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 		CustomPath  string `json:"customPath"`
 		Label       string `json:"label"`
 		IsServerMod bool   `json:"isServerMod"`
+		Optional    bool   `json:"optional"`
 		Enabled     *bool  `json:"enabled"`
 		Source      string `json:"source"`
 	}
@@ -701,7 +702,8 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 			ModID:       item.ModID,
 			CustomPath:  item.CustomPath,
 			Label:       item.Label,
-			IsServerMod: item.IsServerMod,
+			IsServerMod: item.IsServerMod && !item.Optional,
+			Optional:    item.Optional,
 			Enabled:     enabled,
 			Source:      source,
 		})
@@ -715,6 +717,21 @@ func PutServerModsHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[SERVER] provision after mod update: %v", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// GetServerModSignaturesHandler returns the signature/key check per server mod entry id.
+func GetServerModSignaturesHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	reports, err := server.ServerModSignatures(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check mod signatures")
+		return
+	}
+	writeJSON(w, http.StatusOK, reports)
 }
 
 func DiscoverLocalModsHandler(w http.ResponseWriter, r *http.Request) {

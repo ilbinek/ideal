@@ -290,6 +290,7 @@ func (m *Manager) finishGoSteamItem(it *Item) {
 		return
 	}
 	server.RescanKeysForMod(it.ID)
+	server.RefreshModSignature(it.ID)
 
 	m.mu.Lock()
 	it.Status = StatusDone
@@ -357,6 +358,7 @@ func (m *Manager) download(item *Item) {
 		return
 	}
 	server.RescanKeysForMod(item.ID)
+	server.RefreshModSignature(item.ID)
 
 	m.mu.Lock()
 	item.Status = StatusDone

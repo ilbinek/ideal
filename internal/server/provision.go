@@ -139,7 +139,8 @@ func provisionMods(instanceDir string, serverID int) error {
 
 	usedNames := make(map[string]int)
 	for _, sm := range serverMods {
-		if !sm.Enabled {
+		// Optional (key-only) mods are not linked; provisionKeys still picks up their keys.
+		if !sm.Enabled || sm.Optional {
 			continue
 		}
 		linkName, srcPath, ok := ModLinkNameForServer(serverID, srv.Slug, sm)

@@ -14,6 +14,7 @@ import { formatDate } from "@/lib/utils";
 import type { ServerStatus } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { SignatureBadge, signatureSummary } from "@/components/SignatureBadge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -204,6 +205,25 @@ export function ModDetail() {
               <span className="text-muted-foreground">Last checked</span>
               <span>{formatDate(data.lastChecked)}</span>
             </div>
+            {data.downloaded && (
+              <div className="flex flex-col gap-1 border-t pt-3">
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Signatures</span>
+                  <span className="flex items-center gap-1.5">
+                    <SignatureBadge report={data.signature} />
+                    {data.signature
+                      ? `${data.signature.signedCount}/${data.signature.pboCount} PBOs signed`
+                      : "Not checked"}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">{signatureSummary(data.signature)}</p>
+                {!!data.signature?.keys?.length && (
+                  <p className="text-xs text-muted-foreground">
+                    Shipped keys: <span className="font-mono">{data.signature.keys.join(", ")}</span>
+                  </p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 

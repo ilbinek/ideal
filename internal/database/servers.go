@@ -68,6 +68,7 @@ type ServerMod struct {
 	CustomPath  string `json:"customPath,omitempty"`
 	Label       string `json:"label"`
 	IsServerMod bool   `json:"isServerMod"`
+	Optional    bool   `json:"optional"` // key-only: bikey extracted, mod never loaded
 	Enabled     bool   `json:"enabled"`
 	Source      string `json:"source"`
 	SortOrder   int    `json:"sortOrder"`
@@ -170,6 +171,7 @@ func migrateServerColumns() error {
 		"ALTER TABLE servers ADD COLUMN sort_order INTEGER DEFAULT 0",
 		"ALTER TABLE server_mods ADD COLUMN enabled BOOLEAN DEFAULT 1",
 		"ALTER TABLE server_mods ADD COLUMN source TEXT DEFAULT ''",
+		"ALTER TABLE server_mods ADD COLUMN optional BOOLEAN DEFAULT 0",
 		"ALTER TABLE arma_branches ADD COLUMN build_id TEXT DEFAULT ''",
 		"ALTER TABLE arma_branches ADD COLUMN update_available BOOLEAN DEFAULT 0",
 		"ALTER TABLE arma_branches ADD COLUMN last_checked TIMESTAMP",
@@ -782,7 +784,7 @@ func DeleteServer(id int) error {
 func GetServerMods(serverID int) ([]ServerMod, error) {
 	rows, err := db.Query(`
 		SELECT id, server_id, mod_id, COALESCE(custom_path, ''), label, is_server_mod,
-		       COALESCE(enabled, 1), COALESCE(source, ''), sort_order
+		       COALESCE(optional, 0), COALESCE(enabled, 1), COALESCE(source, ''), sort_order
 		FROM server_mods WHERE server_id = ? ORDER BY sort_order, id`, serverID)
 	if err != nil {
 		return nil, err
@@ -793,11 +795,15 @@ func GetServerMods(serverID int) ([]ServerMod, error) {
 	for rows.Next() {
 		var m ServerMod
 		var modID sql.NullInt64
-		var enabled int
-		if err := rows.Scan(&m.ID, &m.ServerID, &modID, &m.CustomPath, &m.Label, &m.IsServerMod, &enabled, &m.Source, &m.SortOrder); err != nil {
+		var enabled, optional int
+		if err := rows.Scan(&m.ID, &m.ServerID, &modID, &m.CustomPath, &m.Label, &m.IsServerMod, &optional, &enabled, &m.Source, &m.SortOrder); err != nil {
 			return nil, err
 		}
 		m.Enabled = enabled != 0
+		m.Optional = optional != 0
+		if m.Optional {
+			m.IsServerMod = false
+		}
 		if modID.Valid {
 			v := int(modID.Int64)
 			m.ModID = &v
@@ -839,10 +845,11 @@ func ReplaceServerMods(serverID int, mods []ServerMod) error {
 		if m.Enabled {
 			enabled = 1
 		}
+		isServerMod := m.IsServerMod && !m.Optional
 		_, err := tx.Exec(`
-			INSERT INTO server_mods (server_id, mod_id, custom_path, label, is_server_mod, enabled, source, sort_order)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			serverID, modID, nullIfEmpty(m.CustomPath), m.Label, m.IsServerMod, enabled, source, i,
+			INSERT INTO server_mods (server_id, mod_id, custom_path, label, is_server_mod, optional, enabled, source, sort_order)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			serverID, modID, nullIfEmpty(m.CustomPath), m.Label, isServerMod, m.Optional, enabled, source, i,
 		)
 		if err != nil {
 			return err
@@ -857,10 +864,16 @@ func SeedServerModsFromModset(serverID, modsetID int) error {
 		return err
 	}
 	var preserved []ServerMod
+	// Remember per-mod load flags so mods kept across a modset swap stay
+	// server-only / optional instead of resetting to client mods.
+	prevFlags := make(map[int]ServerMod)
 	for _, m := range existing {
 		// Keep manually added path-based mods when swapping modsets.
 		if m.ModID == nil && m.CustomPath != "" {
 			preserved = append(preserved, m)
+		}
+		if m.ModID != nil {
+			prevFlags[*m.ModID] = m
 		}
 	}
 
@@ -872,14 +885,19 @@ func SeedServerModsFromModset(serverID, modsetID int) error {
 	serverMods = append(serverMods, preserved...)
 	for i, m := range mods {
 		modID := m.ID
-		serverMods = append(serverMods, ServerMod{
+		sm := ServerMod{
 			ServerID:    serverID,
 			ModID:       &modID,
 			Label:       m.Name,
 			IsServerMod: false,
 			Enabled:     true,
 			SortOrder:   len(preserved) + i,
-		})
+		}
+		if prev, ok := prevFlags[modID]; ok {
+			sm.IsServerMod = prev.IsServerMod
+			sm.Optional = prev.Optional
+		}
+		serverMods = append(serverMods, sm)
 	}
 	return ReplaceServerMods(serverID, serverMods)
 }

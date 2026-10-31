@@ -97,6 +97,7 @@ func APIHandler() http.Handler {
 	// Server mods
 	mux.HandleFunc("GET /api/servers/{id}/mods", apiServerAdmin(GetServerModsHandler))
 	mux.HandleFunc("PUT /api/servers/{id}/mods", apiServerAdmin(PutServerModsHandler))
+	mux.HandleFunc("GET /api/servers/{id}/mods/signatures", apiServerAdmin(GetServerModSignaturesHandler))
 	mux.HandleFunc("POST /api/localmods/discover", apiAuth(func(w http.ResponseWriter, r *http.Request) {
 		p := auth.FromContext(r.Context())
 		if p == nil || !p.CanAccessServers() {

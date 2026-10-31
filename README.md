@@ -204,6 +204,10 @@ Downloaded mods live under `./mods/<workshopId>/`. An `./addons/` tree of lowerc
 
 For **managed servers**, `.bikey` files are copied into `servers/<slug>/keys/` automatically when the instance is provisioned. You do not need to copy keys by hand for Ideal-started servers.
 
+**Optional / client-side mods:** in a server's **Mods** tab set a mod's **Load as** to **Optional (key only)**. Its `.bikey` is added to the server's keys, but the mod is not passed to `-mod=`/`-serverMod=` (nor to headless clients), so players may run it optionally.
+
+**Signature check:** a shield icon next to each mod (Mods page and server mod list) shows signing health — green: every `addons/*.pbo` has a `.bisign` and a matching `.bikey` exists; yellow: PBOs are signed but the matching `.bikey` is missing; red: some PBOs have no `.bisign`. Hover for details. In the server list, keys already present in the server's `keys/` (custom uploads, other mods) count as available. Bisigns are matched to bikeys by their embedded public key, not by file name; PBO contents are not re-hashed.
+
 ### 5. A3Sync folder
 
 1. Open **Mods**

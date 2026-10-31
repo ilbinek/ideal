@@ -565,7 +565,7 @@ func CollectDockerExtraMounts(serverID int) []string {
 	dataRoot := filepath.Clean(utils.DataRoot())
 	var mounts []string
 	for _, sm := range mods {
-		if !sm.Enabled || sm.CustomPath == "" {
+		if !sm.Enabled || sm.Optional || sm.CustomPath == "" {
 			continue
 		}
 		abs, err := filepath.Abs(sm.CustomPath)

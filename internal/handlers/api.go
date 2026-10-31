@@ -408,6 +408,7 @@ func GetModHandler(w http.ResponseWriter, r *http.Request) {
 		"lastUpdated":     mod.LastUpdated,
 		"lastChecked":     mod.LastChecked,
 		"updateAvailable": mod.UpdateAvailable,
+		"signature":       mod.Signature,
 		"modsets":         modsets,
 		"servers":         servers,
 	})

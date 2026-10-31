@@ -180,7 +180,8 @@ func buildModParams(instanceDir string, serverID int, slug string) (modParam, se
 	}
 
 	for _, sm := range serverMods {
-		if !sm.Enabled {
+		// Optional (key-only) mods contribute a bikey but are never loaded.
+		if !sm.Enabled || sm.Optional {
 			continue
 		}
 		linkName, _, ok := ModLinkNameForServer(serverID, slug, sm)
