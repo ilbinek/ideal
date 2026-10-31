@@ -186,6 +186,8 @@ Steam credentials, downloader choice, and related options live in the SQLite dat
 
 Default ports per server: game `2302`, Steam query `2303` (Steam defaults to game port + 1 if omitted).
 
+**Duplicate** (server header, full admins) makes an independent copy under a new name — e.g. to test new addons without touching the live setup. It copies all settings, the mod list (incl. server-only / optional flags), custom keys, server admins, headless clients, `server.cfg`/`basic.cfg`, profiles and missions. Ports are shifted by the next free multiple of 100 (e.g. `2302` → `2402`, BattlEye `RConPort` likewise) and the copy's `server.cfg` hostname is set to the new name. Logs, crash dumps, caches and generated folders (`mods/`, `keys/`, …) are not copied; they are rebuilt on provision.
+
 After Ideal restarts, transitional statuses are reconciled (e.g. a stuck `stopping` after a reboot becomes `stopped` when the process is gone).
 
 ### 3. Mods and modsets

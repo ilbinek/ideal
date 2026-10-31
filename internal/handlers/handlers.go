@@ -87,6 +87,7 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("GET /api/servers/{id}", apiServerAdmin(GetServerHandler))
 	mux.HandleFunc("PUT /api/servers/{id}", apiServerAdmin(UpdateServerHandler))
 	mux.HandleFunc("DELETE /api/servers/{id}", apiFullAdmin(DeleteServerHandler))
+	mux.HandleFunc("POST /api/servers/{id}/duplicate", apiFullAdmin(DuplicateServerHandler))
 	mux.HandleFunc("POST /api/servers/{id}/provision", apiServerAdmin(ProvisionServerHandler))
 	mux.HandleFunc("POST /api/servers/{id}/start", apiServerAdmin(StartServerHandler))
 	mux.HandleFunc("POST /api/servers/{id}/stop", apiServerAdmin(StopServerHandler))

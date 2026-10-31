@@ -923,6 +923,85 @@ func GetServerKeys(serverID int) ([]ServerKey, error) {
 	return keys, rows.Err()
 }
 
+// DuplicateServer copies a server's settings, mod list, custom keys and admin
+// assignments into a new stopped server with the given name, slug and ports.
+// mapKeyPath rewrites each custom key's source path (e.g. into the new
+// instance dir). Runtime state (status, pid, content pins) is not copied.
+func DuplicateServer(srcID int, name, slug string, gamePort, steamPort int, mapKeyPath func(string) string) (int64, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var nextOrder int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(sort_order), -1) + 1 FROM servers`).Scan(&nextOrder); err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`
+		INSERT INTO servers (name, slug, branch_id, modset_id, game_port, steam_port, profile_name,
+			server_binary, local_mods_root, extra_launch_params, sort_order, status, pid, active_rpt,
+			headless_count, enabled_cdlcs, mission_http_serve, cpu_affinity, memory_limit_mb)
+		SELECT ?, ?, branch_id, modset_id, ?, ?, profile_name,
+			server_binary, local_mods_root, extra_launch_params, ?, ?, 0, '',
+			headless_count, enabled_cdlcs, mission_http_serve, cpu_affinity, memory_limit_mb
+		FROM servers WHERE id = ?`,
+		name, slug, gamePort, steamPort, nextOrder, ServerStatusStopped, srcID)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, sql.ErrNoRows
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO server_mods (server_id, mod_id, custom_path, label, is_server_mod, optional, enabled, source, sort_order)
+		SELECT ?, mod_id, custom_path, label, is_server_mod, optional, enabled, source, sort_order
+		FROM server_mods WHERE server_id = ? ORDER BY sort_order, id`, newID, srcID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO server_admins (user_id, server_id)
+		SELECT user_id, ? FROM server_admins WHERE server_id = ?`, newID, srcID); err != nil {
+		return 0, err
+	}
+
+	rows, err := tx.Query(`SELECT filename, source_path FROM server_keys WHERE server_id = ? ORDER BY id`, srcID)
+	if err != nil {
+		return 0, err
+	}
+	type key struct{ filename, path string }
+	var keys []key
+	for rows.Next() {
+		var k key
+		if err := rows.Scan(&k.filename, &k.path); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, k := range keys {
+		path := k.path
+		if mapKeyPath != nil {
+			path = mapKeyPath(path)
+		}
+		if _, err := tx.Exec(`INSERT INTO server_keys (server_id, filename, source_path) VALUES (?, ?, ?)`,
+			newID, k.filename, path); err != nil {
+			return 0, err
+		}
+	}
+
+	return newID, tx.Commit()
+}
+
 func AddServerKey(serverID int, filename, sourcePath string) (int64, error) {
 	result, err := db.Exec(
 		"INSERT INTO server_keys (server_id, filename, source_path) VALUES (?, ?, ?)",

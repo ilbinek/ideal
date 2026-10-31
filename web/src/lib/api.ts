@@ -282,6 +282,12 @@ export const api = {
     }),
   deleteServer: (id: number) =>
     request<{ ok: boolean }>(`/api/servers/${id}`, { method: "DELETE" }),
+  /** Full copy of a server (settings, mods, keys, configs, profiles, missions) under a new name. */
+  duplicateServer: (id: number, name: string) =>
+    request<{ id: number; slug: string; name: string; gamePort: number; steamPort: number }>(
+      `/api/servers/${id}/duplicate`,
+      { method: "POST", body: JSON.stringify({ name }) },
+    ),
   provisionServer: (id: number) =>
     request<{ ok: boolean }>(`/api/servers/${id}/provision`, { method: "POST" }),
   startServer: (id: number) =>

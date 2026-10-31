@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -45,6 +45,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type {
   GameServer,
   HeadlessClientSnapshot,
@@ -112,6 +120,100 @@ function LoadModeBadge({ mode, warn }: { mode: ModLoadMode; warn?: boolean }) {
   );
 }
 
+function DuplicateServerDialog({
+  server,
+  open,
+  onOpenChange,
+  onDuplicated,
+}: {
+  server: GameServer;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDuplicated: (newId: number) => void;
+}) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [name, setName] = useState("");
+
+  useEffect(() => {
+    if (open) setName(`${server.name} (copy)`);
+  }, [open, server.name]);
+
+  const duplicate = useMutation({
+    mutationFn: () => api.duplicateServer(server.id, name.trim()),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+      toast.success(`Created ${res.name} on :${res.gamePort} / steam :${res.steamPort}`);
+      onOpenChange(false);
+      onDuplicated(res.id);
+    },
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!duplicate.isPending) onOpenChange(o);
+        if (!o) duplicate.reset();
+      }}
+    >
+      <DialogContent>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) duplicate.mutate();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Duplicate server</DialogTitle>
+            <DialogDescription>
+              Creates an independent copy of <strong>{server.name}</strong>: settings, mods,
+              keys, configs, profiles, missions and headless clients. Ports are assigned
+              automatically so both can run at once. The original is not changed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="duplicate-name">Name</Label>
+            <Input
+              id="duplicate-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+            />
+            <p className="text-xs text-muted-foreground">
+              Also used as the hostname in the copy&apos;s server.cfg.
+            </p>
+          </div>
+          {duplicate.isError && (
+            <p className="text-sm text-destructive">
+              {duplicate.error instanceof Error ? duplicate.error.message : "Duplicate failed"}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={duplicate.isPending}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={duplicate.isPending || !name.trim()}>
+              {duplicate.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+              Duplicate
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
   const serverId = parseInt(id ?? "0", 10);
@@ -119,7 +221,9 @@ export function ServerDetail() {
   const { statusFor } = useServers();
   const { data: session } = useSession();
   const perms = permissionsOf(session);
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("overview");
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
 
   const server = useQuery({
     queryKey: ["servers", serverId],
@@ -271,6 +375,16 @@ export function ServerDetail() {
           {perms.isFullAdmin && (
             <Button
               size="sm"
+              variant="outline"
+              title="Duplicate server"
+              onClick={() => setDuplicateOpen(true)}
+            >
+              <Copy className="size-3.5" /> Duplicate
+            </Button>
+          )}
+          {perms.isFullAdmin && (
+            <Button
+              size="sm"
               variant="destructive"
               disabled={isRunning || del.isPending}
               onClick={() => {
@@ -282,6 +396,18 @@ export function ServerDetail() {
           )}
         </div>
       </div>
+
+      {perms.isFullAdmin && (
+        <DuplicateServerDialog
+          server={srv}
+          open={duplicateOpen}
+          onOpenChange={setDuplicateOpen}
+          onDuplicated={(newId) => {
+            setTab("overview");
+            navigate(`/servers/${newId}`);
+          }}
+        />
+      )}
 
       {actionError && (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
