@@ -5,11 +5,14 @@ import {
   ArrowLeft,
   Copy,
   Download,
+  KeyRound,
   Loader2,
+  MonitorSmartphone,
   Play,
   RefreshCw,
   RotateCcw,
   Search,
+  Server,
   Square,
   Trash2,
   Upload,
@@ -67,6 +70,46 @@ function modLoadMode(m: ServerMod): ModLoadMode {
 
 function withLoadMode(m: ServerMod, mode: ModLoadMode): ServerMod {
   return { ...m, isServerMod: mode === "server", optional: mode === "optional" };
+}
+
+const LOAD_MODE_BADGES: Record<
+  ModLoadMode,
+  {
+    label: string;
+    title: string;
+    variant: "outline" | "info" | "secondary";
+    Icon: typeof Server;
+  }
+> = {
+  client: {
+    label: "client + server",
+    title: "Loaded with -mod: required on the server and on every client.",
+    variant: "outline",
+    Icon: MonitorSmartphone,
+  },
+  server: {
+    label: "server only",
+    title: "Loaded with -serverMod: runs on the server only; clients do not need it.",
+    variant: "info",
+    Icon: Server,
+  },
+  optional: {
+    label: "key only",
+    title:
+      "Not loaded. Only its .bikey is added to the server, so clients may run it optionally.",
+    variant: "secondary",
+    Icon: KeyRound,
+  },
+};
+
+function LoadModeBadge({ mode, warn }: { mode: ModLoadMode; warn?: boolean }) {
+  const { label, title, variant, Icon } = LOAD_MODE_BADGES[mode];
+  return (
+    <Badge variant={warn ? "warning" : variant} title={title} className="shrink-0">
+      <Icon className="size-3" />
+      {label}
+    </Badge>
+  );
 }
 
 export function ServerDetail() {
@@ -1035,6 +1078,16 @@ function ModsTab({ serverId }: { serverId: number }) {
               may run them. Shield: green = all PBOs signed and key present, yellow = bikey
               missing, red = unsigned PBOs.
             </CardDescription>
+            {mods.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {(["client", "server", "optional"] as const).map((mode) => (
+                  <span key={mode} className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <LoadModeBadge mode={mode} />
+                    {mods.filter((m) => m.enabled !== false && modLoadMode(m) === mode).length}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
             Save & provision
@@ -1077,18 +1130,11 @@ function ModsTab({ serverId }: { serverId: number }) {
                       <div className="flex items-center gap-2">
                         {signatureFor(m) && <SignatureBadge report={signatureFor(m)} />}
                         <span>{m.label}</span>
-                        {m.optional && (
-                          <Badge
-                            variant={
-                              signatureFor(m) && signatureFor(m)!.status !== "ok"
-                                ? "warning"
-                                : "secondary"
-                            }
-                            title="Only the .bikey is added to the server; the mod is not loaded. Clients may run it optionally."
-                          >
-                            key only
-                          </Badge>
-                        )}
+                        <LoadModeBadge
+                          mode={modLoadMode(m)}
+                          // A key-only mod without a usable key gets clients kicked.
+                          warn={m.optional && !!signatureFor(m) && signatureFor(m)!.status !== "ok"}
+                        />
                       </div>
                     </TableCell>
                     <TableCell className="max-w-[240px] truncate text-xs text-muted-foreground">
