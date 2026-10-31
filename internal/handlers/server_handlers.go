@@ -494,6 +494,32 @@ func DeleteServerHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// DuplicateServerHandler creates an independent copy of a server under a new name.
+func DuplicateServerHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid server id")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Name) == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if _, err := database.GetServer(id); err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	res, err := server.DuplicateServer(id, body.Name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to duplicate server: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func ProvisionServerHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
