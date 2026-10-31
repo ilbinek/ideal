@@ -5,11 +5,14 @@ import {
   ArrowLeft,
   Copy,
   Download,
+  KeyRound,
   Loader2,
+  MonitorSmartphone,
   Play,
   RefreshCw,
   RotateCcw,
   Search,
+  Server,
   Square,
   Trash2,
   Upload,
@@ -20,6 +23,7 @@ import { permissionsOf, useSession } from "@/hooks/useSession";
 import { useHeadlessLogs, useServerLogs } from "@/hooks/useServerLogs";
 import { formatDate, formatBytes, formatCpuPercent, formatBytesPerSec, cpuGaugeFill, memoryGaugeFill, formatMemoryOfHost, copyText } from "@/lib/utils";
 import { HalfCircleGauge } from "@/components/HalfCircleGauge";
+import { SignatureBadge } from "@/components/SignatureBadge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -56,6 +60,57 @@ import {
 } from "@/lib/serverCfg";
 
 type Tab = "overview" | "mods" | "keys" | "config" | "logs" | "headless" | "missions";
+
+type ModLoadMode = "client" | "server" | "optional";
+
+function modLoadMode(m: ServerMod): ModLoadMode {
+  if (m.optional) return "optional";
+  return m.isServerMod ? "server" : "client";
+}
+
+function withLoadMode(m: ServerMod, mode: ModLoadMode): ServerMod {
+  return { ...m, isServerMod: mode === "server", optional: mode === "optional" };
+}
+
+const LOAD_MODE_BADGES: Record<
+  ModLoadMode,
+  {
+    label: string;
+    title: string;
+    variant: "outline" | "info" | "secondary";
+    Icon: typeof Server;
+  }
+> = {
+  client: {
+    label: "client + server",
+    title: "Loaded with -mod: required on the server and on every client.",
+    variant: "outline",
+    Icon: MonitorSmartphone,
+  },
+  server: {
+    label: "server only",
+    title: "Loaded with -serverMod: runs on the server only; clients do not need it.",
+    variant: "info",
+    Icon: Server,
+  },
+  optional: {
+    label: "key only",
+    title:
+      "Not loaded. Only its .bikey is added to the server, so clients may run it optionally.",
+    variant: "secondary",
+    Icon: KeyRound,
+  },
+};
+
+function LoadModeBadge({ mode, warn }: { mode: ModLoadMode; warn?: boolean }) {
+  const { label, title, variant, Icon } = LOAD_MODE_BADGES[mode];
+  return (
+    <Badge variant={warn ? "warning" : variant} title={title} className="shrink-0">
+      <Icon className="size-3" />
+      {label}
+    </Badge>
+  );
+}
 
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
@@ -837,6 +892,12 @@ function ModsTab({ serverId }: { serverId: number }) {
     queryFn: () => api.getServerMods(serverId),
   });
   const allMods = useQuery({ queryKey: ["mods"], queryFn: () => api.getMods() });
+  const signatures = useQuery({
+    queryKey: ["serverModSignatures", serverId],
+    queryFn: () => api.getServerModSignatures(serverId),
+  });
+  const signatureFor = (m: ServerMod) =>
+    m.id !== undefined ? signatures.data?.[String(m.id)] : undefined;
 
   const [mods, setMods] = useState<ServerMod[]>([]);
   const [customPath, setCustomPath] = useState("");
@@ -852,6 +913,7 @@ function ModsTab({ serverId }: { serverId: number }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["serverMods", serverId] });
       queryClient.invalidateQueries({ queryKey: ["serverKeys", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["serverModSignatures", serverId] });
       queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
     },
   });
@@ -875,6 +937,7 @@ function ModsTab({ serverId }: { serverId: number }) {
             customPath: f.path,
             label: f.name,
             isServerMod: false,
+            optional: false,
             enabled: true,
             source: "custom",
           });
@@ -899,7 +962,7 @@ function ModsTab({ serverId }: { serverId: number }) {
     if (!mod) return;
     setMods((prev) => [
       ...prev,
-      { modId, label: mod.name, isServerMod: false, enabled: true, source: "" },
+      { modId, label: mod.name, isServerMod: false, optional: false, enabled: true, source: "" },
     ]);
   };
 
@@ -911,6 +974,7 @@ function ModsTab({ serverId }: { serverId: number }) {
         customPath: customPath.trim(),
         label: customPath.split(/[/\\]/).pop() ?? "custom",
         isServerMod: false,
+        optional: false,
         enabled: true,
         source: "custom",
       },
@@ -1007,7 +1071,24 @@ function ModsTab({ serverId }: { serverId: number }) {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Loaded mods</CardTitle>
+          <div className="flex flex-col gap-1.5">
+            <CardTitle className="text-base">Loaded mods</CardTitle>
+            <CardDescription>
+              Optional (key only) mods are not loaded — only their .bikey is added so clients
+              may run them. Shield: green = all PBOs signed and key present, yellow = bikey
+              missing, red = unsigned PBOs.
+            </CardDescription>
+            {mods.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {(["client", "server", "optional"] as const).map((mode) => (
+                  <span key={mode} className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <LoadModeBadge mode={mode} />
+                    {mods.filter((m) => m.enabled !== false && modLoadMode(m) === mode).length}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
             Save & provision
           </Button>
@@ -1022,7 +1103,7 @@ function ModsTab({ serverId }: { serverId: number }) {
                   <TableHead>Enabled</TableHead>
                   <TableHead>Label</TableHead>
                   <TableHead>Source</TableHead>
-                  <TableHead>Server mod</TableHead>
+                  <TableHead>Load as</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -1045,22 +1126,36 @@ function ModsTab({ serverId }: { serverId: number }) {
                         }
                       />
                     </TableCell>
-                    <TableCell>{m.label}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {signatureFor(m) && <SignatureBadge report={signatureFor(m)} />}
+                        <span>{m.label}</span>
+                        <LoadModeBadge
+                          mode={modLoadMode(m)}
+                          // A key-only mod without a usable key gets clients kicked.
+                          warn={m.optional && !!signatureFor(m) && signatureFor(m)!.status !== "ok"}
+                        />
+                      </div>
+                    </TableCell>
                     <TableCell className="max-w-[240px] truncate text-xs text-muted-foreground">
                       {sourceLabel(m)}
                     </TableCell>
-                    <TableCell>
-                      <input
-                        type="checkbox"
-                        checked={m.isServerMod}
+                    <TableCell className="min-w-[200px]">
+                      <Select
+                        className="h-8 text-xs"
+                        value={modLoadMode(m)}
                         onChange={(e) =>
                           setMods((prev) =>
                             prev.map((x, j) =>
-                              j === i ? { ...x, isServerMod: e.target.checked } : x,
+                              j === i ? withLoadMode(x, e.target.value as ModLoadMode) : x,
                             ),
                           )
                         }
-                      />
+                      >
+                        <option value="client">Client &amp; server (-mod)</option>
+                        <option value="server">Server only (-serverMod)</option>
+                        <option value="optional">Optional (key only)</option>
+                      </Select>
                     </TableCell>
                     <TableCell>
                       <Button

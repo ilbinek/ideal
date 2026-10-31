@@ -73,6 +73,8 @@ func Init() {
 	Default.adoptOrphans()
 	// Drop unused old generations after adopt so pins for live servers are kept.
 	contentver.GCAllOrphans()
+	// Check .pbo/.bisign/.bikey state for mods downloaded before this was tracked.
+	go BackfillModSignatures()
 }
 
 // ReconcileStatuses settles orphaned DB statuses on startup. Servers still bound

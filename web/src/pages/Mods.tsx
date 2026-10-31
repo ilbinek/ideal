@@ -47,8 +47,9 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useDownloads } from "@/hooks/useDownloads";
 import { PageHeader } from "@/components/PageHeader";
+import { SignatureBadge } from "@/components/SignatureBadge";
 
-type StatusFilter = "all" | "downloaded" | "missing" | "outdated";
+type StatusFilter = "all" | "downloaded" | "missing" | "outdated" | "signature";
 type SortKey = "name" | "workshopId" | "status" | "lastUpdated" | "lastChecked";
 type SortDir = "asc" | "desc";
 
@@ -57,7 +58,15 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "downloaded", label: "Downloaded" },
   { value: "missing", label: "Missing" },
   { value: "outdated", label: "Update available" },
+  { value: "signature", label: "Signature issues" },
 ];
+
+function hasSignatureIssue(mod: Mod): boolean {
+  return (
+    mod.downloaded &&
+    (mod.signature?.status === "unsigned" || mod.signature?.status === "missing_key")
+  );
+}
 
 function statusRank(mod: Mod): number {
   if (mod.updateAvailable) return 2;
@@ -426,7 +435,8 @@ function AddModDialog({ modset }: { modset?: number }) {
 }
 
 function parseStatusFilter(raw: string | null): StatusFilter {
-  if (raw === "downloaded" || raw === "missing" || raw === "outdated") return raw;
+  if (raw === "downloaded" || raw === "missing" || raw === "outdated" || raw === "signature")
+    return raw;
   return "all";
 }
 
@@ -516,6 +526,7 @@ export function Mods() {
       downloaded: list.filter((m) => m.downloaded).length,
       missing: list.filter((m) => !m.downloaded).length,
       outdated: list.filter((m) => m.updateAvailable).length,
+      signature: list.filter(hasSignatureIssue).length,
     };
   }, [mods]);
 
@@ -539,6 +550,9 @@ export function Mods() {
         break;
       case "outdated":
         list = list.filter((m) => m.updateAvailable);
+        break;
+      case "signature":
+        list = list.filter(hasSignatureIssue);
         break;
     }
 
@@ -785,7 +799,9 @@ export function Mods() {
                     ? counts.downloaded
                     : f.value === "missing"
                       ? counts.missing
-                      : counts.outdated;
+                      : f.value === "signature"
+                        ? counts.signature
+                        : counts.outdated;
               const active = statusFilter === f.value;
               return (
                 <Button
@@ -929,12 +945,15 @@ export function Mods() {
                         />
                       </TableCell>
                       <TableCell className="font-medium">
-                        <Link
-                          to={`/mods/${mod.id}`}
-                          className="text-primary hover:underline"
-                        >
-                          {mod.name}
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          {mod.downloaded && <SignatureBadge report={mod.signature} />}
+                          <Link
+                            to={`/mods/${mod.id}`}
+                            className="text-primary hover:underline"
+                          >
+                            {mod.name}
+                          </Link>
+                        </div>
                       </TableCell>
                       <TableCell>
                         <a

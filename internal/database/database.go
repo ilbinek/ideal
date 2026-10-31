@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,8 @@ type Mod struct {
 	LastChecked         time.Time `json:"lastChecked"`
 	UpdateAvailable     bool      `json:"updateAvailable"`
 	LastNotifiedUpdated int64     `json:"-"` // Steam time_updated last Discord-notified for
+	// Signature is the last .pbo/.bisign/.bikey check of the current generation (nil = not checked yet).
+	Signature *utils.SignatureReport `json:"signature,omitempty"`
 }
 
 func Init() error {
@@ -121,6 +124,7 @@ func migrate() error {
 		"ALTER TABLE config ADD COLUMN auto_download_updates INTEGER DEFAULT 0",
 		"ALTER TABLE config ADD COLUMN use_docker INTEGER DEFAULT 0",
 		"ALTER TABLE mods ADD COLUMN last_notified_updated INTEGER DEFAULT 0",
+		"ALTER TABLE mods ADD COLUMN signature_report TEXT DEFAULT ''",
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -316,7 +320,7 @@ func GetMods(modsetID int) ([]Mod, error) {
 	rows, err := db.Query(`
 		SELECT m.id, m.workshop_id, m.name, m.downloaded, COALESCE(m.local_path, ''), 
 		       COALESCE(m.last_updated, ''), COALESCE(m.last_checked, ''), m.update_available,
-		       COALESCE(m.last_notified_updated, 0)
+		       COALESCE(m.last_notified_updated, 0), COALESCE(m.signature_report, '')
 		FROM mods m
 		INNER JOIN modset_mods mm ON m.id = mm.mod_id
 		WHERE mm.modset_id = ?
@@ -333,7 +337,7 @@ func GetExclusiveMods(modsetID int) ([]Mod, error) {
 	rows, err := db.Query(`
 		SELECT m.id, m.workshop_id, m.name, m.downloaded, COALESCE(m.local_path, ''),
 		       COALESCE(m.last_updated, ''), COALESCE(m.last_checked, ''), m.update_available,
-		       COALESCE(m.last_notified_updated, 0)
+		       COALESCE(m.last_notified_updated, 0), COALESCE(m.signature_report, '')
 		FROM mods m
 		INNER JOIN modset_mods mm ON m.id = mm.mod_id
 		WHERE mm.modset_id = ?
@@ -353,7 +357,7 @@ func GetAllMods() ([]Mod, error) {
 	rows, err := db.Query(`
 		SELECT id, workshop_id, name, downloaded, COALESCE(local_path, ''), 
 		       COALESCE(last_updated, ''), COALESCE(last_checked, ''), update_available,
-		       COALESCE(last_notified_updated, 0)
+		       COALESCE(last_notified_updated, 0), COALESCE(signature_report, '')
 		FROM mods 
 		ORDER BY name`)
 	if err != nil {
@@ -367,11 +371,12 @@ func scanMods(rows *sql.Rows) ([]Mod, error) {
 	var mods []Mod
 	for rows.Next() {
 		var m Mod
-		var lastUpdated, lastChecked string
+		var lastUpdated, lastChecked, sigReport string
 		if err := rows.Scan(&m.ID, &m.WorkshopID, &m.Name, &m.Downloaded,
-			&m.LocalPath, &lastUpdated, &lastChecked, &m.UpdateAvailable, &m.LastNotifiedUpdated); err != nil {
+			&m.LocalPath, &lastUpdated, &lastChecked, &m.UpdateAvailable, &m.LastNotifiedUpdated, &sigReport); err != nil {
 			return nil, err
 		}
+		m.Signature = decodeSignatureReport(sigReport)
 		if lastUpdated != "" {
 			m.LastUpdated, _ = time.Parse("2006-01-02 15:04:05", lastUpdated)
 		}
@@ -408,6 +413,31 @@ func SetModNotified(id int, steamTimeUpdated int64) error {
 	return err
 }
 
+// SetModSignature stores the signature check result for a mod (nil clears it).
+func SetModSignature(id int, report *utils.SignatureReport) error {
+	data := ""
+	if report != nil {
+		b, err := json.Marshal(report)
+		if err != nil {
+			return err
+		}
+		data = string(b)
+	}
+	_, err := db.Exec("UPDATE mods SET signature_report = ? WHERE id = ?", data, id)
+	return err
+}
+
+func decodeSignatureReport(data string) *utils.SignatureReport {
+	if data == "" {
+		return nil
+	}
+	var r utils.SignatureReport
+	if err := json.Unmarshal([]byte(data), &r); err != nil {
+		return nil
+	}
+	return &r
+}
+
 func DeleteMod(id int) error {
 	_, err := db.Exec("DELETE FROM mods WHERE id = ?", id)
 	return err
@@ -436,7 +466,7 @@ func GetModsByIDs(ids []int) ([]Mod, error) {
 	query := fmt.Sprintf(`
 		SELECT id, workshop_id, name, downloaded, COALESCE(local_path, ''),
 		       COALESCE(last_updated, ''), COALESCE(last_checked, ''), update_available,
-		       COALESCE(last_notified_updated, 0)
+		       COALESCE(last_notified_updated, 0), COALESCE(signature_report, '')
 		FROM mods
 		WHERE id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := db.Query(query, args...)
@@ -451,10 +481,11 @@ func GetMod(id int) (*Mod, error) {
 	var mod Mod
 	var lastUpdated, lastChecked sql.NullTime
 	var localPath sql.NullString
+	var sigReport string
 
 	err := db.QueryRow(
 		`SELECT id, workshop_id, name, downloaded, local_path, last_updated, last_checked, update_available,
-		        COALESCE(last_notified_updated, 0)
+		        COALESCE(last_notified_updated, 0), COALESCE(signature_report, '')
 		 FROM mods WHERE id = ?`,
 		id,
 	).Scan(
@@ -467,6 +498,7 @@ func GetMod(id int) (*Mod, error) {
 		&lastChecked,
 		&mod.UpdateAvailable,
 		&mod.LastNotifiedUpdated,
+		&sigReport,
 	)
 	if err != nil {
 		return nil, err
@@ -481,6 +513,7 @@ func GetMod(id int) (*Mod, error) {
 	if lastChecked.Valid {
 		mod.LastChecked = lastChecked.Time
 	}
+	mod.Signature = decodeSignatureReport(sigReport)
 
 	return &mod, nil
 }

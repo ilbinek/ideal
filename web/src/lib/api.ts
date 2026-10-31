@@ -19,6 +19,7 @@ import type {
   ServerMod,
   ServerStatusSnapshot,
   Session,
+  SignatureReport,
   Settings,
   StartupCommand,
   SteamLoginState,
@@ -301,6 +302,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(mods),
     }),
+  /** Signature/key check per server mod entry id (against the server's key set). */
+  getServerModSignatures: (id: number) =>
+    request<Record<string, SignatureReport>>(`/api/servers/${id}/mods/signatures`),
 
   // Server keys
   getServerKeys: (id: number) => request<ServerKeysResponse>(`/api/servers/${id}/keys`),

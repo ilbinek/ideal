@@ -7,6 +7,22 @@ export interface Mod {
   lastUpdated: string;
   lastChecked: string;
   updateAvailable: boolean;
+  /** Last .pbo/.bisign/.bikey check of the current download; absent = not checked yet. */
+  signature?: SignatureReport;
+}
+
+export type SignatureStatus = "ok" | "missing_key" | "unsigned" | "no_pbos" | "unknown";
+
+export interface SignatureReport {
+  status: SignatureStatus;
+  pboCount: number;
+  signedCount: number;
+  unsignedPbos?: string[];
+  unmatchedPbos?: string[];
+  unmatchedCount?: number;
+  authorities?: string[];
+  keys?: string[];
+  missingKeys?: string[];
 }
 
 export interface Modset {
@@ -197,6 +213,8 @@ export interface ServerMod {
   customPath?: string;
   label: string;
   isServerMod: boolean;
+  /** Key-only: the mod's .bikey is added to the server but the mod is never loaded. */
+  optional?: boolean;
   enabled?: boolean;
   source?: string;
   sortOrder?: number;
