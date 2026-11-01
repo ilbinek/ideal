@@ -2,6 +2,8 @@ module arma3modmanager
 
 go 1.25.1
 
+godebug multipathtcp=0
+
 require (
 	github.com/ilbinek/godishook v1.0.0
 	github.com/mattn/go-sqlite3 v1.14.19

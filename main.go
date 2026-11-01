@@ -80,6 +80,16 @@ func main() {
 		addr = ":" + config.AppConfig.Port
 	}
 
+	// Ideal is built with MPTCP disabled (godebug multipathtcp=0 in go.mod), so its
+	// own listeners are plain TCP. Still warn when the host has MPTCP enabled, as
+	// an unpatched kernel exposes any MPTCP listener to the CVE-2026-98432 exploit.
+	if utils.HostMPTCPEnabled() {
+		log.Printf("[IDEAL] WARNING: host has net.mptcp.enabled=1. If the kernel is not patched for\n" +
+			"  CVE-2026-98432 (IPv4 TCP use-after-free; fixed in 5.10.272 / 5.15.223 / 6.1.190 /\n" +
+			"  6.6.159 / 6.12.113 / 6.18.56 / 7.2.10+), MPTCP listeners on this host are exposed to\n" +
+			"  the demonstrated exploit. Ideal itself is built with MPTCP disabled (godebug multipathtcp=0).")
+	}
+
 	log.Printf("Starting Arma 3 Mod Manager on %s", addr)
 	if err := http.ListenAndServe(addr, root); err != nil {
 		log.Fatal(err)
