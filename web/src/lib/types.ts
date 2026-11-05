@@ -282,6 +282,7 @@ export interface ServerStatusSnapshot {
   headless?: HeadlessClientSnapshot[];
   /** Lifecycle operation in progress. */
   op?: string;
+  autostart?: boolean;
   /** Unix seconds of the next automatic restart attempt. */
   retryAt?: number;
   /** Recent failed runs counted towards giving up. */

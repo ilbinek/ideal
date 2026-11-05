@@ -75,3 +75,21 @@ func TestFindPortOwnerSelf(t *testing.T) {
 		t.Fatalf("description %q", desc)
 	}
 }
+
+func TestLoopbackListenHost(t *testing.T) {
+	cases := map[string]string{
+		"":               "",
+		":8080":          "",
+		"0.0.0.0:8080":   "",
+		"192.168.1.5:80": "",
+		"127.0.0.1:8080": "127.0.0.1",
+		"[::1]:8080":     "::1",
+		"localhost:8080": "127.0.0.1",
+		"not an address": "",
+	}
+	for listen, want := range cases {
+		if got := loopbackListenHost(listen); got != want {
+			t.Errorf("%q: got %q, want %q", listen, got, want)
+		}
+	}
+}

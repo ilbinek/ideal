@@ -430,9 +430,25 @@ func WaitForRPT(slug string, after time.Time, timeout time.Duration) (string, er
 
 // portProbeHost is the address port checks bind. Empty means every interface, which
 // is what production needs: Arma binds all interfaces, and a loopback-only probe can
-// succeed alongside it and miss the conflict. Tests set it to loopback, because a
-// freshly built test binary binding every interface triggers a firewall prompt.
-var portProbeHost = ""
+// succeed alongside it and miss the conflict. Local test runs use loopback instead
+// (IDEAL_LISTEN=127.0.0.1:..., and always in go test), because a freshly built binary
+// binding every interface triggers a firewall prompt each time.
+var portProbeHost = loopbackListenHost(os.Getenv("IDEAL_LISTEN"))
+
+// loopbackListenHost returns the host of a listen address if it's loopback-only.
+func loopbackListenHost(listen string) string {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return host
+	}
+	if strings.EqualFold(host, "localhost") {
+		return "127.0.0.1"
+	}
+	return ""
+}
 
 func portProbeAddr(port int) string {
 	return net.JoinHostPort(portProbeHost, strconv.Itoa(port))

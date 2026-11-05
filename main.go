@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"arma3modmanager/internal/auth"
+	"arma3modmanager/internal/automation"
 	"arma3modmanager/internal/config"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/handlers"
@@ -89,6 +90,9 @@ func main() {
 			"  6.6.159 / 6.12.113 / 6.18.56 / 7.2.10+), MPTCP listeners on this host are exposed to\n" +
 			"  the demonstrated exploit. Ideal itself is built with MPTCP disabled (godebug multipathtcp=0).")
 	}
+
+	// Last, so nothing is started by a run that's about to exit over bad settings.
+	automation.Default.Start()
 
 	log.Printf("Starting Arma 3 Mod Manager on %s", addr)
 	if err := http.ListenAndServe(addr, root); err != nil {

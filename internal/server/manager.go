@@ -27,6 +27,15 @@ type StatusSnapshot struct {
 	Metrics   *ProcessMetrics          `json:"metrics,omitempty"`
 	Headless  []HeadlessStatusSnapshot `json:"headless,omitempty"`
 	Op        string                   `json:"op,omitempty"` // lifecycle operation in progress
+
+	// Automation state, filled in by the status decorator.
+	Autostart     bool  `json:"autostart,omitempty"`
+	RetryAt       int64 `json:"retryAt,omitempty"`
+	Failures      int   `json:"failures,omitempty"`
+	GaveUp        bool  `json:"gaveUp,omitempty"`
+	UserStopped   bool  `json:"userStopped,omitempty"`
+	NextRestartAt int64 `json:"nextRestartAt,omitempty"`
+	Paused        bool  `json:"paused,omitempty"`
 }
 
 // AllStatusSnapshot is broadcast to SSE subscribers.
@@ -49,6 +58,9 @@ type Manager struct {
 	hookMu       sync.Mutex
 	exitObserver func(ExitEvent)
 	lastPins     map[int]string // content each server last ran, to spot changes
+
+	statusDecorator func(*StatusSnapshot)
+	resumingStops   map[int]bool
 
 	// Test seams; nil means the real implementation.
 	launcher        func(context.Context, int) (*launchedServer, error)
@@ -91,8 +103,19 @@ func Init() {
 	resumeStops := ReconcileStatuses()
 	ReconcileHeadlessStatuses()
 	Default.adoptOrphans()
+	Default.hookMu.Lock()
+	Default.resumingStops = make(map[int]bool, len(resumeStops))
+	for _, id := range resumeStops {
+		Default.resumingStops[id] = true
+	}
+	Default.hookMu.Unlock()
 	for _, id := range resumeStops {
 		go func(id int) {
+			defer func() {
+				Default.hookMu.Lock()
+				delete(Default.resumingStops, id)
+				Default.hookMu.Unlock()
+			}()
 			if err := Default.Stop(id, ActorSystem); err != nil {
 				log.Printf("[SERVER] resuming interrupted stop of server %d: %v", id, err)
 			}
@@ -364,6 +387,10 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 	defer m.mu.Unlock()
 	m.ensureHCMap()
 
+	m.hookMu.Lock()
+	decorate := m.statusDecorator
+	m.hookMu.Unlock()
+
 	var snaps []StatusSnapshot
 	host := sampleHostContext()
 	for _, s := range servers {
@@ -417,6 +444,9 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 				attachHostContext(hcSnap.Metrics, host)
 			}
 			snap.Headless = append(snap.Headless, hcSnap)
+		}
+		if decorate != nil {
+			decorate(&snap)
 		}
 		snaps = append(snaps, snap)
 	}

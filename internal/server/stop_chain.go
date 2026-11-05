@@ -98,6 +98,37 @@ func sendRConShutdown(srv *database.Server) bool {
 	return true
 }
 
+// SendRConMessage shows a message to all players. It fails when RCON isn't usable,
+// which is routine on servers without BattlEye.
+func SendRConMessage(serverID int, message string) error {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return err
+	}
+	_, creds, usable := loadRCon(srv)
+	if !usable {
+		return errRConUnavailable
+	}
+	client, err := rcon.Dial(creds.Host, creds.Port, creds.Password, rconAttempts, rconTimeout)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Command(rcon.SayAll(message))
+}
+
+var errRConUnavailable = errors.New("RCON is not available for this server")
+
+// IsRConUnavailable reports whether an error just means the server has no RCON.
+func IsRConUnavailable(err error) bool {
+	return errors.Is(err, errRConUnavailable)
+}
+
+// SendRConMessage is on the Manager too, so callers can depend on an interface.
+func (m *Manager) SendRConMessage(serverID int, message string) error {
+	return SendRConMessage(serverID, message)
+}
+
 func chainForInstance(inst *runningInstance, srv *database.Server) stopChain {
 	chain := stopChain{
 		done:      inst.proc.done,

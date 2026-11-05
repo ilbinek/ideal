@@ -39,6 +39,9 @@ type ExitEvent struct {
 	HasCode   bool
 }
 
+// ErrAlreadyRunning means a start found the server already up.
+var ErrAlreadyRunning = errors.New("server is already running")
+
 // launchedServer is a verified, running process that isn't registered yet.
 type launchedServer struct {
 	proc           *managedProc
@@ -109,6 +112,70 @@ func (m *Manager) Start(serverID int, by Actor) error {
 	return nil
 }
 
+// StartSystem starts a server on Ideal's own initiative. guard runs once the
+// server's operation lock is held, so it sees the final word on whether this should
+// still happen; a person's Stop can't slip in between the check and the start.
+func (m *Manager) StartSystem(serverID int, guard func() error) error {
+	op, running := m.tryBeginOp(serverID, OpStart, ActorSystem, nil)
+	if op == nil {
+		return &BusyError{Op: running.kind}
+	}
+	defer m.endOp(serverID, op)
+	if guard != nil {
+		if err := guard(); err != nil {
+			return err
+		}
+	}
+	return m.startInner(op, serverID)
+}
+
+// RestartPlanned restarts a server on a schedule, with the same guard as
+// StartSystem. attempted says whether the start half ran.
+func (m *Manager) RestartPlanned(serverID int, guard func() error) (attempted bool, err error) {
+	op, running := m.tryBeginOp(serverID, OpRestart, ActorSystem, nil)
+	if op == nil {
+		return false, &BusyError{Op: running.kind}
+	}
+	defer m.endOp(serverID, op)
+	if guard != nil {
+		if err := guard(); err != nil {
+			return false, err
+		}
+	}
+	return m.restartInner(op, serverID)
+}
+
+// Running reports whether a server is being tracked as running, and since when.
+func (m *Manager) Running(serverID int) (bool, time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[serverID]
+	if !ok || inst.state != instRunning {
+		return false, time.Time{}
+	}
+	return true, inst.startedAt
+}
+
+// ResumingStop reports whether a stop interrupted by Ideal dying is being finished.
+func (m *Manager) ResumingStop(serverID int) bool {
+	m.hookMu.Lock()
+	defer m.hookMu.Unlock()
+	return m.resumingStops[serverID]
+}
+
+// SetStatusDecorator registers a callback that adds to each status snapshot. It's
+// called with the manager's lock held, so it must not block or take locks.
+func (m *Manager) SetStatusDecorator(fn func(*StatusSnapshot)) {
+	m.hookMu.Lock()
+	defer m.hookMu.Unlock()
+	m.statusDecorator = fn
+}
+
+// Broadcast pushes current status to subscribers.
+func (m *Manager) Broadcast() {
+	m.broadcast()
+}
+
 func logIntentError(serverID int, err error) {
 	if err != nil {
 		log.Printf("[SERVER] could not record intent for server %d: %v", serverID, err)
@@ -151,7 +218,7 @@ func (m *Manager) startInner(op *serverOp, serverID int) error {
 	m.mu.Lock()
 	if _, running := m.instances[serverID]; running {
 		m.mu.Unlock()
-		return fmt.Errorf("server is already running")
+		return ErrAlreadyRunning
 	}
 	m.mu.Unlock()
 

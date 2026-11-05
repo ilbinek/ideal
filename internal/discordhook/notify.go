@@ -46,6 +46,33 @@ func NotifyModUpdate(webhookURL, modName, workshopID string, serverNames []strin
 	return nil
 }
 
+// NotifyServerEvent sends a Discord embed about something that happened to a server.
+// Unlike the update notifications it takes a context, since it's sent while a server
+// is down and a hung webhook mustn't linger.
+func NotifyServerEvent(ctx context.Context, webhookURL, title, serverName, detail string) error {
+	if strings.TrimSpace(webhookURL) == "" {
+		return nil
+	}
+	client, err := godishook.NewFromURL(webhookURL)
+	if err != nil {
+		return fmt.Errorf("discord webhook: %w", err)
+	}
+	embed := godishook.NewEmbed().
+		Title(title).
+		Color(0xE74C3C).
+		Timestamp(time.Now()).
+		Field("Server", serverName, false).
+		Footer("IDEAL mod manager", "")
+	if strings.TrimSpace(detail) != "" {
+		embed = embed.Field("Details", detail, false)
+	}
+	if _, err := client.Send(ctx, godishook.Message().Username(username).Embed(embed)); err != nil {
+		return err
+	}
+	log.Printf("[DISCORD] notified %q: %s", title, serverName)
+	return nil
+}
+
 // NotifyBranchUpdate sends a Discord embed for a dedicated-server branch update.
 func NotifyBranchUpdate(webhookURL, branchName, steamBranch, remoteBuildID string, serverNames []string) error {
 	if strings.TrimSpace(webhookURL) == "" {

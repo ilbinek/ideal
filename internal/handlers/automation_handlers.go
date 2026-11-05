@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"arma3modmanager/internal/automation"
 	"arma3modmanager/internal/database"
 	"arma3modmanager/internal/server"
 )
@@ -209,4 +210,6 @@ func PutAutomationSettingsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // reloadAutomation tells the coordinator its settings changed.
-func reloadAutomation() {}
+func reloadAutomation() {
+	automation.Default.Reload()
+}

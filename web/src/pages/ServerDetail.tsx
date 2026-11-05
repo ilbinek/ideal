@@ -60,6 +60,7 @@ import type {
   ProcessMetrics,
   ServerMod,
   ServerStatus,
+  ServerStatusSnapshot,
 } from "@/lib/types";
 import {
   applyServerCfgForm,
@@ -212,6 +213,48 @@ function DuplicateServerDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Counts down to the next automatic restart attempt. */
+function RetryCountdown({ at }: { at: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.ceil(at - now / 1000));
+  return <Badge variant="secondary">restarting in {seconds}s</Badge>;
+}
+
+/** What automation is doing, or won't do, for this server. */
+function AutomationBadges({
+  live,
+  status,
+}: {
+  live?: ServerStatusSnapshot;
+  status: string;
+}) {
+  if (!live) return null;
+  return (
+    <>
+      {live.retryAt ? <RetryCountdown at={live.retryAt} /> : null}
+      {live.gaveUp ? (
+        <Badge variant="destructive" title="Too many failures in a row. It stays off until someone starts it.">
+          gave up restarting
+        </Badge>
+      ) : null}
+      {live.userStopped && live.autostart && status === "stopped" ? (
+        <Badge variant="outline" title="Stopped on purpose, so it won't start when Ideal launches until someone starts it.">
+          won't start on launch
+        </Badge>
+      ) : null}
+      {live.paused ? (
+        <Badge variant="outline" title="All automation is paused in Settings.">
+          automation paused
+        </Badge>
+      ) : null}
+    </>
   );
 }
 
@@ -375,7 +418,19 @@ export function ServerDetail() {
         >
           {status}
         </Badge>
+        <AutomationBadges live={live} status={status} />
         <div className="flex gap-2">
+          {live?.retryAt && !isRunning && !isStopping ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={stop.isPending}
+              title="Don't restart this server automatically; it stays off until someone starts it"
+              onClick={() => stop.mutate()}
+            >
+              <Square className="size-3.5" /> Cancel restart
+            </Button>
+          ) : null}
           {isStopping ? (
             <Button
               size="sm"
