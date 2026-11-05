@@ -430,3 +430,28 @@ func TestExclusiveBlocksLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Another program holding the game port used to read as the server still running,
+// forever. It must count as the exit it is.
+func TestForeignPortHolderDoesNotKeepServerRunning(t *testing.T) {
+	f := newLifecycleFixture(t)
+	if err := f.m.Start(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := database.GetServer(f.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This test binary isn't an Arma server, so it stands in for the foreign holder.
+	holder, err := net.ListenUDP("udp", &net.UDPAddr{Port: srv.GamePort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+
+	f.exitProcess()
+	waitFor(t, "exit despite foreign port holder", func() bool { return f.exits.Load() == 1 })
+	if got := f.status(t); got != database.ServerStatusStopped {
+		t.Fatalf("status %q", got)
+	}
+}

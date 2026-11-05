@@ -95,10 +95,11 @@ func Init() {
 	go BackfillModSignatures()
 }
 
-// ReconcileStatuses settles orphaned DB statuses on startup. Servers still bound
-// to their game port are left alone when marked running/starting (Arma often
-// outlives the launcher PID we captured). Transitional "stopping" is always
-// recovered so a mid-stop reboot cannot trap the UI.
+// ReconcileStatuses settles orphaned DB statuses on startup. A server stays
+// running/starting only if its recorded process, its container, or a process
+// provably its own (holding its game port) is still alive; a port held by anything
+// else doesn't count. Transitional "stopping" is always recovered so a mid-stop
+// reboot cannot trap the UI.
 func ReconcileStatuses() {
 	servers, err := database.GetServers()
 	if err != nil {
@@ -109,7 +110,22 @@ func ReconcileStatuses() {
 		s := servers[i]
 		dockerUp := dockerContainerRunning(s.ID)
 		identity := identifyServerPID(&s)
-		alive := dockerUp || identity == identityMatch || IsPortInUse(s.GamePort)
+		if !dockerUp && identity != identityMatch && identity != identityUnknown &&
+			s.Status != database.ServerStatusStopped {
+			// The recorded PID is gone, but a child of this server may hold the port.
+			portSt, owner := inspectGamePort(&s)
+			if portSt == portOwned {
+				createMs := captureCreateMs(owner)
+				_ = database.UpdateServerProcess(s.ID, s.Status, owner, createMs, s.ActiveRPT)
+				s.PID, s.PIDCreateMs = owner, createMs
+				servers[i] = s
+				identity = identityMatch
+			} else if portSt != portFree {
+				log.Printf("[SERVER] game port %d of server %d (%s) is in use by something else%s",
+					s.GamePort, s.ID, s.Slug, describePortHolder(s.GamePort))
+			}
+		}
+		alive := dockerUp || identity == identityMatch
 		if !dockerUp && identity == identityUnknown {
 			// A live process we can't inspect: don't adopt it, don't kill it, and
 			// don't call it stopped. Stop explains, and a later run re-checks.
@@ -140,7 +156,7 @@ func ReconcileStatuses() {
 					continue
 				}
 			}
-			if identifyServerPID(&s) == identityMatch || IsPortInUse(s.GamePort) || dockerContainerRunning(s.ID) {
+			if identifyServerPID(&s) == identityMatch || dockerContainerRunning(s.ID) {
 				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
 				continue
 			}

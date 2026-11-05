@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -287,7 +288,8 @@ func (m *Manager) launchServer(ctx context.Context, serverID int) (*launchedServ
 	}
 
 	// Confirm the process did not die immediately (e.g. port still held on UDP).
-	if err := verifyProcessStartup(ctx, proc, srv.GamePort, 8*time.Second); err != nil {
+	verified, err := verifyProcessStartup(ctx, proc, srv, 8*time.Second)
+	if err != nil {
 		if useDocker {
 			_ = stopDockerContainer(serverID, sessionLogPath)
 		} else {
@@ -298,6 +300,17 @@ func (m *Manager) launchServer(ctx context.Context, serverID int) (*launchedServ
 		abort()
 		log.Printf("[SERVER] start failed for %d: %v", serverID, err)
 		return nil, err
+	}
+	if verified != proc {
+		// The launched process handed off to a child, which is the real server now.
+		proc = verified
+		_ = database.UpdateServerProcess(serverID, database.ServerStatusStarting, proc.pid, captureCreateMs(proc.pid), "")
+		if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
+			log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
+		}
+		if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
+			log.Printf("[SERVER] memory limit warning for %d: %v", serverID, err)
+		}
 	}
 
 	// Linux Arma prints RPT to stdout (captured into the session log under Docker).
@@ -328,9 +341,9 @@ func waitForPortsFree(ctx context.Context, gamePort, steamPort int, timeout time
 		}
 		if time.Now().After(deadline) {
 			if !gameFree {
-				return fmt.Errorf("game port %d is not available", gamePort)
+				return fmt.Errorf("game port %d is not available%s", gamePort, describePortHolder(gamePort))
 			}
-			return fmt.Errorf("steam port %d is not available", steamPort)
+			return fmt.Errorf("steam port %d is not available%s", steamPort, describePortHolder(steamPort))
 		}
 		select {
 		case <-time.After(500 * time.Millisecond):
@@ -341,35 +354,58 @@ func waitForPortsFree(ctx context.Context, gamePort, steamPort int, timeout time
 }
 
 // verifyProcessStartup ensures the child did not exit right away. Prefer seeing
-// the game port bind; if Arma is still starting after timeout, allow it.
-func verifyProcessStartup(ctx context.Context, proc *managedProc, gamePort int, timeout time.Duration) error {
+// the game port bind; if Arma is still starting after timeout, allow it. It returns
+// the process to track, which differs from proc if a child of it took over.
+func verifyProcessStartup(ctx context.Context, proc *managedProc, srv *database.Server, timeout time.Duration) (*managedProc, error) {
 	deadline := time.Now().Add(timeout)
 	sawAlive := false
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
-			return errStartCancelled(err)
+			return nil, errStartCancelled(err)
 		}
 		if !proc.exited() {
 			sawAlive = true
-			if IsPortInUse(gamePort) {
-				return nil
+			// Both ports were free before launch, so a busy port now is this process.
+			if IsPortInUse(srv.GamePort) {
+				return proc, nil
 			}
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		// Process exited. If something else (or a child) holds the port, treat as OK.
-		if IsPortInUse(gamePort) {
-			return nil
+		successor, err := successorAfterExit(srv)
+		if successor != nil || err != nil {
+			return successor, err
 		}
 		if sawAlive {
-			return fmt.Errorf("server process exited immediately after start (check session log / ports)")
+			return nil, errExitedAfterStart
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if proc.exited() && !IsPortInUse(gamePort) {
-		return fmt.Errorf("server process exited immediately after start (check session log / ports)")
+	if !proc.exited() {
+		return proc, nil
 	}
-	return nil
+	successor, err := successorAfterExit(srv)
+	if successor != nil || err != nil {
+		return successor, err
+	}
+	return nil, errExitedAfterStart
+}
+
+var errExitedAfterStart = errors.New("server process exited immediately after start (check session log / ports)")
+
+// successorAfterExit looks at the game port after the launched process exited. A
+// child of this server holding it takes over; anything else holding it is an error.
+// A free port returns nothing, leaving the caller to decide.
+func successorAfterExit(srv *database.Server) (*managedProc, error) {
+	state, owner := inspectGamePort(srv)
+	switch state {
+	case portOwned:
+		return adoptProcess(owner), nil
+	case portFree:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("server process exited after start and game port %d is in use%s", srv.GamePort, describePortHolder(srv.GamePort))
+	}
 }
 
 // Stop shuts a server down, preempting a start that is still in progress and
@@ -501,7 +537,7 @@ func (m *Manager) stopInner(op *serverOp, serverID int) error {
 		if inst.dockerMode {
 			stillAlive = dockerContainerRunning(serverID)
 		} else {
-			stillAlive = !inst.proc.exited() && ServerAlive(inst.pid, gamePort)
+			stillAlive = !inst.proc.exited() && processRunning(inst.pid)
 		}
 		if stillAlive {
 			// Still running — revert so status cannot stay stuck on "stopping".
@@ -519,6 +555,9 @@ func (m *Manager) stopInner(op *serverOp, serverID int) error {
 	_ = inst.proc.wait(30 * time.Second)
 	m.removeInstance(inst)
 
+	if srv != nil && !inst.dockerMode {
+		stopOwnedPortHolder(srv)
+	}
 	if gamePort > 0 {
 		_ = waitForPortsFree(context.Background(), gamePort, steamPort, 30*time.Second)
 	}
@@ -553,6 +592,7 @@ func (m *Manager) stopOrphan(serverID int) error {
 		case identityMismatch:
 			log.Printf("[SERVER] not stopping pid=%d: it no longer belongs to server %d", srv.PID, serverID)
 		}
+		stopOwnedPortHolder(srv)
 	}
 	_ = waitForPortsFree(context.Background(), srv.GamePort, srv.SteamPort, 15*time.Second)
 	m.markStopped(serverID, srv.ActiveRPT)
@@ -587,7 +627,7 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 		interval = defaultWatchInterval
 	}
 
-	consecutiveDead := 0
+	consecutiveDead, unknownPolls := 0, 0
 	for {
 		time.Sleep(interval)
 
@@ -596,10 +636,12 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 		sameGen := tracked && inst.gen == gen
 		var proc *managedProc
 		var pid int
+		var dockerMode bool
 		state := instRunning
 		if sameGen {
 			proc = inst.proc
 			pid = inst.pid
+			dockerMode = inst.dockerMode
 			state = inst.state
 		}
 		m.mu.Unlock()
@@ -620,18 +662,37 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 			return
 		}
 
-		// Prefer the Wait() result: once reaped, the PID is gone. Port fallback
-		// still covers Arma leaving a child bound after the launcher exits.
-		if proc != nil && proc.exited() {
-			if IsPortInUse(srv.GamePort) {
+		procAlive := proc != nil && !proc.exited()
+		if procAlive && !dockerMode {
+			// A container is watched directly; its PID may not be visible here.
+			procAlive = processRunning(pid)
+		}
+		if procAlive {
+			consecutiveDead, unknownPolls = 0, 0
+			m.broadcast()
+			continue
+		}
+
+		// The process is gone. A busy port only keeps the server alive if the holder
+		// is provably this server's, such as a child Arma left bound to the port.
+		if !dockerMode {
+			portSt, owner := inspectGamePort(srv)
+			var verdict portVerdict
+			verdict, unknownPolls = judgePort(portSt, unknownPolls)
+			switch verdict {
+			case verdictRetarget:
+				m.retargetInstance(serverID, gen, owner)
 				consecutiveDead = 0
 				m.broadcast()
 				continue
+			case verdictHold:
+				m.broadcast()
+				continue
 			}
-		} else if ServerAlive(pid, srv.GamePort) {
-			consecutiveDead = 0
-			m.broadcast()
-			continue
+			if portSt == portForeign || portSt == portOwnerUnknown {
+				log.Printf("[SERVER] server %d exited and something else holds game port %d%s",
+					serverID, srv.GamePort, describePortHolder(srv.GamePort))
+			}
 		}
 
 		consecutiveDead++
@@ -658,6 +719,22 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 	if ok && inst.gen == gen {
 		m.finishExited(inst)
 	}
+}
+
+// retargetInstance points an instance at the child process that took over from it.
+func (m *Manager) retargetInstance(serverID int, gen uint64, pid int) {
+	m.mu.Lock()
+	inst, ok := m.instances[serverID]
+	if !ok || inst.gen != gen || inst.state != instRunning {
+		m.mu.Unlock()
+		return
+	}
+	inst.pid = pid
+	inst.proc = adoptProcess(pid)
+	rpt := inst.rptPath
+	m.mu.Unlock()
+	_ = database.UpdateServerProcess(serverID, database.ServerStatusRunning, pid, captureCreateMs(pid), rpt)
+	log.Printf("[SERVER] server %d continues as pid=%d, which now holds its game port", serverID, pid)
 }
 
 // finishExited cleans up after a process that exited on its own, then reports it.
