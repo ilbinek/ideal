@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"arma3modmanager/internal/database"
@@ -430,10 +431,17 @@ func WaitForRPT(slug string, after time.Time, timeout time.Duration) (string, er
 
 // portProbeHost is the address port checks bind. Empty means every interface, which
 // is what production needs: Arma binds all interfaces, and a loopback-only probe can
-// succeed alongside it and miss the conflict. Local test runs use loopback instead
-// (IDEAL_LISTEN=127.0.0.1:..., and always in go test), because a freshly built binary
-// binding every interface triggers a firewall prompt each time.
-var portProbeHost = loopbackListenHost(os.Getenv("IDEAL_LISTEN"))
+// succeed alongside it and miss the conflict. Local test runs use loopback instead,
+// because a freshly built binary binding every interface triggers a firewall prompt
+// each time: always under go test, in every package, and with a loopback IDEAL_LISTEN.
+var portProbeHost = defaultPortProbeHost()
+
+func defaultPortProbeHost() string {
+	if testing.Testing() {
+		return "127.0.0.1"
+	}
+	return loopbackListenHost(os.Getenv("IDEAL_LISTEN"))
+}
 
 // loopbackListenHost returns the host of a listen address if it's loopback-only.
 func loopbackListenHost(listen string) string {

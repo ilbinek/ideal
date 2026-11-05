@@ -164,7 +164,7 @@ Steam credentials, downloader choice, and related options live in the SQLite dat
 
 | Variable | Purpose |
 |---|---|
-| `IDEAL_LISTEN` | Override HTTP bind address (e.g. `127.0.0.1:8080`). Default is all interfaces on the configured port (`:8080`). |
+| `IDEAL_LISTEN` | Override HTTP bind address (e.g. `127.0.0.1:8080`). Default is all interfaces on the configured port (`:8080`). A loopback address also keeps server port checks on loopback, which avoids firewall prompts during local testing, but those checks can then miss a port held on another interface. |
 | `IDEAL_DATA_DIR` | Override the data root (config, DB, mods, servers, branches). |
 
 ---
@@ -331,7 +331,13 @@ Change `password` in `config.json` away from `changeme`.
 - SteamCMD / DepotDownloader: SteamCMD must be on `PATH` (or set in Settings); username/password in Settings must be valid
 
 **Server stuck or `unknown` after reboot**  
-Ideal reconciles statuses on startup. If a process is gone, status should settle to `stopped` / `unknown`. Use Stop/Start from the UI if needed.
+Ideal reconciles statuses on startup. If a process is gone, status should settle to `stopped` / `unknown`. Use Stop/Start from the UI if needed. If Ideal couldn't verify that a live process belongs to the server, it leaves that process alone and says so in the server's History; Stop then reports this rather than killing it.
+
+**Game port not available**
+A server only counts as running if its own process holds the port. The Start error names whatever is holding it, so you can close it or change the server's ports.
+
+**A server came back on its own, or won't**
+Check the server's **History** on its Automation tab, which records what Ideal did and why. To keep a server down, use **Stop** rather than closing it another way, as anything else counts as an unexpected exit.
 
 **Empty or broken UI after `go build`**  
 Build the frontend first (`task web:build` or `task build`).

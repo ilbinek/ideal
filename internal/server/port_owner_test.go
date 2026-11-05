@@ -93,3 +93,13 @@ func TestLoopbackListenHost(t *testing.T) {
 		}
 	}
 }
+
+// Binding all interfaces from a test binary pops up a firewall prompt on Windows.
+func TestPortProbesStayOnLoopbackInTests(t *testing.T) {
+	if portProbeHost != "127.0.0.1" {
+		t.Fatalf("port checks bind %q under go test", portProbeHost)
+	}
+	if got := portProbeAddr(2302); got != "127.0.0.1:2302" {
+		t.Fatalf("address %q", got)
+	}
+}
