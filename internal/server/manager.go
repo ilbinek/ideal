@@ -1,9 +1,9 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,6 +41,18 @@ type Manager struct {
 
 	subMu sync.Mutex
 	subs  map[chan AllStatusSnapshot]struct{}
+
+	opMu sync.Mutex
+	ops  map[int]*serverOp
+
+	hookMu       sync.Mutex
+	exitObserver func(ExitEvent)
+
+	// Test seams; nil means the real implementation.
+	launcher        func(context.Context, int) (*launchedServer, error)
+	terminator      func(context.Context, *runningInstance, *serverOp) error
+	headlessStarter func(context.Context, int, int) error
+	watchInterval   time.Duration
 }
 
 type runningInstance struct {
@@ -54,6 +66,12 @@ type runningInstance struct {
 	sessionLogPath string
 	dockerMode     bool
 	containerID    string
+	state          instState // guarded by Manager.mu
+
+	// Headless auto-start tracking, so a stop can cancel it and wait for it.
+	hcCtx    context.Context
+	hcCancel context.CancelFunc
+	hcWG     *sync.WaitGroup
 }
 
 // Default is the process-wide server manager.
@@ -190,6 +208,7 @@ func (m *Manager) adoptOrphans() {
 		}
 
 		gen := atomic.AddUint64(&nextInstanceGen, 1)
+		hcCtx, hcCancel := context.WithCancel(context.Background())
 		m.instances[s.ID] = &runningInstance{
 			serverID:    s.ID,
 			gen:         gen,
@@ -199,6 +218,9 @@ func (m *Manager) adoptOrphans() {
 			rptPath:     s.ActiveRPT,
 			dockerMode:  dockerMode,
 			containerID: containerID,
+			hcCtx:       hcCtx,
+			hcCancel:    hcCancel,
+			hcWG:        &sync.WaitGroup{},
 		}
 		adoptedServers = append(adoptedServers, struct {
 			id  int
@@ -415,238 +437,6 @@ func (m *Manager) broadcast() {
 	}
 }
 
-// Start provisions and launches a server.
-func (m *Manager) Start(serverID int) error {
-	m.mu.Lock()
-	if _, running := m.instances[serverID]; running {
-		m.mu.Unlock()
-		return fmt.Errorf("server is already running")
-	}
-	m.mu.Unlock()
-
-	srv, err := database.GetServer(serverID)
-	if err != nil {
-		return err
-	}
-
-	branch, err := database.GetBranch(srv.BranchID)
-	if err != nil {
-		return err
-	}
-	if !BranchIsInstalled(branch) {
-		return fmt.Errorf("branch %q is not installed", branch.Name)
-	}
-
-	conflicts, err := database.GetServersUsingPort(srv.GamePort, srv.SteamPort, serverID)
-	if err != nil {
-		return err
-	}
-	for _, c := range conflicts {
-		if c.Status == database.ServerStatusRunning || c.Status == database.ServerStatusStarting {
-			return fmt.Errorf("port conflict with server %q", c.Name)
-		}
-	}
-	if err := waitForPortsFree(srv.GamePort, srv.SteamPort, 30*time.Second); err != nil {
-		return err
-	}
-
-	if err := FindRunningAffinityConflict(serverID, ParseAffinity(srv.CPUAffinity)); err != nil {
-		return err
-	}
-
-	pins, err := contentver.CollectPinsForServer(serverID)
-	if err != nil {
-		return fmt.Errorf("failed to collect content pins: %w", err)
-	}
-	if err := database.ReplaceServerPins(serverID, pins); err != nil {
-		return fmt.Errorf("failed to pin content versions: %w", err)
-	}
-
-	if err := ProvisionServer(serverID); err != nil {
-		_, _ = database.ClearServerPins(serverID)
-		return err
-	}
-
-	launch, err := BuildLaunchArgs(serverID)
-	if err != nil {
-		_, _ = database.ClearServerPins(serverID)
-		return err
-	}
-
-	_ = database.UpdateServerStatus(serverID, database.ServerStatusStarting, 0, "")
-	m.broadcast()
-
-	startTime := time.Now()
-	if err := os.MkdirAll(filepath.Join(InstanceDir(srv.Slug), "logs"), 0755); err != nil {
-		_, _ = database.ClearServerPins(serverID)
-		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
-		m.broadcast()
-		return fmt.Errorf("failed to create logs directory: %w", err)
-	}
-	sessionLogPath := filepath.Join(InstanceDir(srv.Slug), "logs",
-		fmt.Sprintf("session-%s.log", startTime.Format("2006-01-02_150405")))
-	sessionFile, err := os.OpenFile(sessionLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		_, _ = database.ClearServerPins(serverID)
-		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
-		m.broadcast()
-		return fmt.Errorf("failed to create session log: %w", err)
-	}
-	sessionLog := newSessionLogWriter(sessionFile, 512*1024)
-
-	useDocker, dockerErr := dockerModeForStart()
-	if dockerErr != nil {
-		_ = sessionLog.Close()
-		_, _ = database.ClearServerPins(serverID)
-		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
-		m.broadcast()
-		return dockerErr
-	}
-	var (
-		proc        *managedProc
-		containerID string
-		startErr    error
-	)
-	if useDocker {
-		// Close Ideal's write handle so the container can append freely; live
-		// tail and historic reads use the on-disk session file under logs/.
-		_ = sessionLog.Close()
-		sessionLog = nil
-		extraMounts := CollectDockerExtraMounts(serverID)
-		containerID, proc, startErr = startDockerServer(
-			serverID, launch.Binary, launch.Args, launch.WorkingDir, sessionLogPath,
-			srv.CPUAffinity, srv.MemoryLimitMB, extraMounts,
-		)
-	} else {
-		proc, startErr = startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
-	}
-	if startErr != nil {
-		_ = sessionLog.Close()
-		_, _ = database.ClearServerPins(serverID)
-		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
-		m.broadcast()
-		return startErr
-	}
-
-	// Persist the PID right away: if Ideal dies during the verify window below,
-	// the next run can still find and adopt this process.
-	createMs := int64(0)
-	if !useDocker {
-		createMs = captureCreateMs(proc.pid)
-	}
-	_ = database.UpdateServerProcess(serverID, database.ServerStatusStarting, proc.pid, createMs, "")
-
-	if !useDocker {
-		if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
-			log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
-		}
-		if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
-			log.Printf("[SERVER] memory limit warning for %d: %v", serverID, err)
-		}
-	}
-
-	// Confirm the process did not die immediately (e.g. port still held on UDP).
-	if err := verifyProcessStartup(proc, srv.GamePort, 8*time.Second); err != nil {
-		if useDocker {
-			_ = stopDockerContainer(serverID, sessionLogPath)
-		} else {
-			_ = stopProcess(proc.pid)
-		}
-		_ = proc.wait(5 * time.Second)
-		_ = sessionLog.Close()
-		_, _ = database.ClearServerPins(serverID)
-		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
-		m.broadcast()
-		log.Printf("[SERVER] start failed for %d: %v", serverID, err)
-		return err
-	}
-
-	gen := atomic.AddUint64(&nextInstanceGen, 1)
-	// Linux Arma prints RPT to stdout (captured into the session log under Docker).
-	// Point ActiveRPT at that file so live tail and the log list stay in sync.
-	rptPath := ResolveRPTPath(srv.Slug, "")
-	if useDocker {
-		rptPath = sessionLogPath
-	}
-
-	m.mu.Lock()
-	m.instances[serverID] = &runningInstance{
-		serverID:       serverID,
-		gen:            gen,
-		pid:            proc.pid,
-		proc:           proc,
-		startedAt:      startTime,
-		rptPath:        rptPath,
-		sessionLog:     sessionLog,
-		sessionLogPath: sessionLogPath,
-		dockerMode:     useDocker,
-		containerID:    containerID,
-	}
-	m.mu.Unlock()
-
-	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, proc.pid, rptPath)
-	m.broadcast()
-
-	go m.watchServer(serverID, gen)
-	if !useDocker {
-		go m.resolveRPT(serverID, gen, startTime)
-	}
-
-	// Start configured headless clients after the dedicated server is up.
-	go func() {
-		time.Sleep(2 * time.Second)
-		m.StartAllHeadless(serverID)
-	}()
-	return nil
-}
-
-func waitForPortsFree(gamePort, steamPort int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		gameFree := IsPortAvailable(gamePort)
-		steamFree := IsPortAvailable(steamPort)
-		if gameFree && steamFree {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			if !gameFree {
-				return fmt.Errorf("game port %d is not available", gamePort)
-			}
-			return fmt.Errorf("steam port %d is not available", steamPort)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-}
-
-// verifyProcessStartup ensures the child did not exit right away. Prefer seeing
-// the game port bind; if Arma is still starting after timeout, allow it.
-func verifyProcessStartup(proc *managedProc, gamePort int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	sawAlive := false
-	for time.Now().Before(deadline) {
-		if !proc.exited() {
-			sawAlive = true
-			if IsPortInUse(gamePort) {
-				return nil
-			}
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		// Process exited. If something else (or a child) holds the port, treat as OK.
-		if IsPortInUse(gamePort) {
-			return nil
-		}
-		if sawAlive {
-			return fmt.Errorf("server process exited immediately after start (check session log / ports)")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if proc.exited() && !IsPortInUse(gamePort) {
-		return fmt.Errorf("server process exited immediately after start (check session log / ports)")
-	}
-	return nil
-}
-
 func (m *Manager) resolveRPT(serverID int, gen uint64, startTime time.Time) {
 	srv, err := database.GetServer(serverID)
 	if err != nil {
@@ -669,118 +459,12 @@ func (m *Manager) resolveRPT(serverID int, gen uint64, startTime time.Time) {
 	m.broadcast()
 }
 
-// Stop stops a running server.
-func (m *Manager) Stop(serverID int) error {
-	m.StopAllHeadless(serverID)
-
-	m.mu.Lock()
-	inst, ok := m.instances[serverID]
-	m.mu.Unlock()
-
-	if !ok {
-		return m.stopOrphan(serverID)
-	}
-
-	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopping, inst.pid, inst.rptPath)
-	m.broadcast()
-
-	srv, _ := database.GetServer(serverID)
-	gamePort, steamPort := 0, 0
-	if srv != nil {
-		gamePort = srv.GamePort
-		steamPort = srv.SteamPort
-	}
-
-	var stopErr error
-	if inst.dockerMode {
-		stopErr = stopDockerContainer(serverID, inst.sessionLogPath)
-	} else {
-		stopErr = stopProcess(inst.pid)
-	}
-	if stopErr != nil {
-		stillAlive := false
-		if inst.dockerMode {
-			stillAlive = dockerContainerRunning(serverID)
-		} else {
-			stillAlive = !inst.proc.exited() && ServerAlive(inst.pid, gamePort)
-		}
-		if stillAlive {
-			// Still running — revert so status cannot stay stuck on "stopping".
-			_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, inst.pid, inst.rptPath)
-			m.broadcast()
-			return stopErr
-		}
-		// Process already gone; treat as a successful stop.
-	}
-
-	// Wait until stdout/stderr pipes are fully drained before closing the log.
-	_ = inst.proc.wait(30 * time.Second)
-
-	m.mu.Lock()
-	// Only clear if this is still the instance we stopped (Restart race safety).
-	if cur, ok := m.instances[serverID]; ok && cur.gen == inst.gen {
-		m.closeInstanceLog(cur)
-		delete(m.instances, serverID)
-	}
-	m.mu.Unlock()
-
-	if gamePort > 0 {
-		_ = waitForPortsFree(gamePort, steamPort, 30*time.Second)
-	}
-
-	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, inst.rptPath)
-	ReleaseServerMemoryLimit(serverID)
-	if pins, err := database.ClearServerPins(serverID); err == nil {
-		contentver.GCReleasedPins(pins)
-	}
-	m.broadcast()
-	return nil
-}
-
-// stopOrphan clears status for a server not tracked in-memory (e.g. after restart).
-func (m *Manager) stopOrphan(serverID int) error {
-	srv, err := database.GetServer(serverID)
-	if err != nil {
-		return err
-	}
-	if _, _, running, _ := findDockerContainer(serverID); running || dockerContainerRunning(serverID) {
-		_ = stopDockerContainer(serverID, latestSessionLogPath(srv.Slug))
-	} else {
-		switch identifyServerPID(srv) {
-		case identityMatch:
-			if err := stopProcess(srv.PID); err != nil && processRunning(srv.PID) {
-				return err
-			}
-		case identityUnknown:
-			return fmt.Errorf("cannot verify that process %d belongs to this server, so it was not stopped", srv.PID)
-		case identityMismatch:
-			log.Printf("[SERVER] not stopping pid=%d: it no longer belongs to server %d", srv.PID, serverID)
-		}
-	}
-	_ = waitForPortsFree(srv.GamePort, srv.SteamPort, 15*time.Second)
-	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, srv.ActiveRPT)
-	ReleaseServerMemoryLimit(serverID)
-	if pins, err := database.ClearServerPins(serverID); err == nil {
-		contentver.GCReleasedPins(pins)
-	}
-	m.broadcast()
-	return nil
-}
-
 func (m *Manager) closeInstanceLog(inst *runningInstance) {
 	if inst == nil || inst.sessionLog == nil {
 		return
 	}
 	_ = inst.sessionLog.Close()
 	inst.sessionLog = nil
-}
-
-// Restart stops then starts a server.
-func (m *Manager) Restart(serverID int) error {
-	if err := m.Stop(serverID); err != nil {
-		return err
-	}
-	return m.Start(serverID)
 }
 
 // latestSessionLogPath returns the newest session-*.log under the instance logs dir.
@@ -851,83 +535,6 @@ func (m *Manager) ActiveSessionLogPath(serverID int) string {
 		return inst.sessionLogPath
 	}
 	return ""
-}
-
-func (m *Manager) watchServer(serverID int, gen uint64) {
-	const pollInterval = 2 * time.Second
-	const deadThreshold = 2
-
-	consecutiveDead := 0
-	for {
-		time.Sleep(pollInterval)
-
-		m.mu.Lock()
-		inst, tracked := m.instances[serverID]
-		sameGen := tracked && inst.gen == gen
-		var proc *managedProc
-		var pid int
-		if sameGen {
-			proc = inst.proc
-			pid = inst.pid
-		}
-		m.mu.Unlock()
-		if !tracked || !sameGen {
-			// Stop/Restart already replaced or removed this instance.
-			return
-		}
-
-		srv, err := database.GetServer(serverID)
-		if err != nil {
-			return
-		}
-
-		// Prefer the Wait() result: once reaped, the PID is gone. Port fallback
-		// still covers Arma leaving a child bound after the launcher exits.
-		if proc != nil && proc.exited() {
-			if IsPortInUse(srv.GamePort) {
-				consecutiveDead = 0
-				m.broadcast()
-				continue
-			}
-		} else if ServerAlive(pid, srv.GamePort) {
-			consecutiveDead = 0
-			m.broadcast()
-			continue
-		}
-
-		consecutiveDead++
-		if consecutiveDead < deadThreshold {
-			continue
-		}
-		break
-	}
-
-	m.mu.Lock()
-	inst, ok := m.instances[serverID]
-	if !ok || inst.gen != gen {
-		m.mu.Unlock()
-		return
-	}
-	if inst.proc != nil {
-		_ = inst.proc.wait(30 * time.Second)
-	}
-	m.closeInstanceLog(inst)
-	delete(m.instances, serverID)
-	m.mu.Unlock()
-
-	m.StopAllHeadless(serverID)
-
-	srv, _ := database.GetServer(serverID)
-	activeRPT := ""
-	if srv != nil {
-		activeRPT = srv.ActiveRPT
-	}
-	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, activeRPT)
-	ReleaseServerMemoryLimit(serverID)
-	if pins, err := database.ClearServerPins(serverID); err == nil {
-		contentver.GCReleasedPins(pins)
-	}
-	m.broadcast()
 }
 
 func processRunning(pid int) bool {

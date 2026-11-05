@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -158,8 +160,24 @@ func (m *Manager) ListHeadless(serverID int) ([]HeadlessStatusSnapshot, error) {
 	return out, nil
 }
 
-// StartHeadless launches one HC slot. Dedicated server should already be running.
+// StartHeadless launches one HC slot. The dedicated server must be running.
 func (m *Manager) StartHeadless(serverID, slot int) error {
+	return m.startHeadlessCtx(context.Background(), serverID, slot)
+}
+
+// parentGeneration returns the running dedicated instance's generation. It fails
+// once a stop has claimed that instance, so no client can start behind a stop.
+func (m *Manager) parentGeneration(serverID int) (uint64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[serverID]
+	if !ok || inst.state != instRunning {
+		return 0, false
+	}
+	return inst.gen, true
+}
+
+func (m *Manager) startHeadlessCtx(ctx context.Context, serverID, slot int) error {
 	m.mu.Lock()
 	m.ensureHCMap()
 	key := hcKey{serverID, slot}
@@ -167,17 +185,11 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 		m.mu.Unlock()
 		return fmt.Errorf("headless client slot %d is already running", slot)
 	}
-	_, serverRunning := m.instances[serverID]
 	m.mu.Unlock()
 
+	parentGen, serverRunning := m.parentGeneration(serverID)
 	if !serverRunning {
-		srv, err := database.GetServer(serverID)
-		if err != nil {
-			return err
-		}
-		if srv.Status != database.ServerStatusRunning && srv.Status != database.ServerStatusStarting {
-			return fmt.Errorf("dedicated server must be running to start headless clients")
-		}
+		return fmt.Errorf("dedicated server must be running to start headless clients")
 	}
 
 	hc, err := database.GetHeadlessClient(serverID, slot)
@@ -269,7 +281,7 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 		}
 	}
 
-	if err := verifyHeadlessStartup(proc, 5*time.Second); err != nil {
+	abort := func() {
 		if parentDocker {
 			_ = stopDockerHeadless(serverID, pid)
 		} else {
@@ -279,6 +291,10 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 		_ = sessionLog.Close()
 		_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusStopped, 0, "")
 		m.broadcast()
+	}
+
+	if err := verifyHeadlessStartup(ctx, proc, 5*time.Second); err != nil {
+		abort()
 		log.Printf("[HC] start failed for server %d slot %d: %v", serverID, slot, err)
 		return err
 	}
@@ -286,7 +302,14 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 	gen := atomic.AddUint64(&nextInstanceGen, 1)
 	rptPath := ResolveHeadlessRPTPath(srv.Slug, hc.ProfileName, "")
 
+	// Register in the same critical section as this re-check: either a stop sees
+	// this client and stops it, or this sees the stop and backs out.
 	m.mu.Lock()
+	if parent, ok := m.instances[serverID]; !ok || parent.gen != parentGen || parent.state != instRunning {
+		m.mu.Unlock()
+		abort()
+		return fmt.Errorf("dedicated server stopped while headless client slot %d was starting", slot)
+	}
 	m.ensureHCMap()
 	m.headless[key] = &runningHeadless{
 		serverID:       serverID,
@@ -311,9 +334,12 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 	return nil
 }
 
-func verifyHeadlessStartup(proc *managedProc, timeout time.Duration) error {
+func verifyHeadlessStartup(ctx context.Context, proc *managedProc, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("headless client start cancelled: %w", err)
+		}
 		if proc.exited() {
 			return fmt.Errorf("headless client process exited immediately after start (check session log)")
 		}
@@ -442,21 +468,32 @@ func (m *Manager) StopAllHeadless(serverID int) {
 	if err != nil {
 		return
 	}
+	// Concurrently, so several clients can't add up to a long wait for the server.
+	var wg sync.WaitGroup
 	for _, hc := range clients {
-		if err := m.StopHeadless(serverID, hc.Slot); err != nil {
-			log.Printf("[HC] stop slot %d for server %d: %v", hc.Slot, serverID, err)
-		}
+		wg.Add(1)
+		go func(slot int) {
+			defer wg.Done()
+			if err := m.StopHeadless(serverID, slot); err != nil {
+				log.Printf("[HC] stop slot %d for server %d: %v", slot, serverID, err)
+			}
+		}(hc.Slot)
 	}
+	wg.Wait()
 }
 
-// StartAllHeadless starts every configured HC for a server.
-func (m *Manager) StartAllHeadless(serverID int) {
+// startAllHeadlessCtx starts every configured HC for a server, until ctx is cancelled.
+func (m *Manager) startAllHeadlessCtx(ctx context.Context, serverID int) {
 	clients, err := database.GetHeadlessClients(serverID)
 	if err != nil {
 		return
 	}
+	start := m.headlessStartFn()
 	for _, hc := range clients {
-		if err := m.StartHeadless(serverID, hc.Slot); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := start(ctx, serverID, hc.Slot); err != nil {
 			log.Printf("[HC] start slot %d for server %d: %v", hc.Slot, serverID, err)
 		}
 	}

@@ -1,6 +1,10 @@
 package server
 
-import "time"
+import (
+	"os/exec"
+	"sync/atomic"
+	"time"
+)
 
 // managedProc is a child started by Ideal. A background Wait() reaps it so it
 // cannot linger as a zombie after SIGKILL or a normal exit.
@@ -8,6 +12,33 @@ import "time"
 type managedProc struct {
 	pid  int
 	done <-chan struct{}
+
+	code    atomic.Int32
+	hasCode atomic.Bool
+}
+
+// newSpawnedProc starts reaping cmd in the background.
+func newSpawnedProc(cmd *exec.Cmd) *managedProc {
+	done := make(chan struct{})
+	p := &managedProc{pid: cmd.Process.Pid, done: done}
+	go func() {
+		defer close(done)
+		_ = cmd.Wait()
+		if cmd.ProcessState != nil {
+			p.code.Store(int32(cmd.ProcessState.ExitCode()))
+			p.hasCode.Store(true)
+		}
+	}()
+	return p
+}
+
+// exitCode returns the process's exit code. Adopted processes never have one,
+// because only the parent can read it.
+func (p *managedProc) exitCode() (int, bool) {
+	if p == nil || !p.hasCode.Load() {
+		return 0, false
+	}
+	return int(p.code.Load()), true
 }
 
 func (p *managedProc) exited() bool {

@@ -28,12 +28,7 @@ func startProcess(binary string, args []string, workDir string, capture io.Write
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
-	}()
-	return &managedProc{pid: cmd.Process.Pid, done: done}, nil
+	return newSpawnedProc(cmd), nil
 }
 
 func stopProcess(pid int) error {

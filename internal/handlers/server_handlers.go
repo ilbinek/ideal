@@ -478,7 +478,19 @@ func DeleteServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-	if srv.Status == database.ServerStatusRunning || srv.Status == database.ServerStatusStarting {
+	end, err := server.Default.BeginExclusive(id, server.OpDelete, requestActor(r))
+	if err != nil {
+		writeLifecycleError(w, err)
+		return
+	}
+	defer end()
+	// Re-read now that no lifecycle operation can be changing the status.
+	if srv, err = database.GetServer(id); err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if srv.Status == database.ServerStatusRunning || srv.Status == database.ServerStatusStarting ||
+		srv.Status == database.ServerStatusStopping {
 		writeError(w, http.StatusConflict, "stop the server before deleting")
 		return
 	}
@@ -539,16 +551,40 @@ func StartServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid server id")
 		return
 	}
-	if err := server.Default.Start(id); err != nil {
-		var conflict *server.AffinityConflictError
-		if errors.As(err, &conflict) {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if err := server.Default.Start(id, requestActor(r)); err != nil {
+		writeLifecycleError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// requestActor names the logged-in user for lifecycle events.
+func requestActor(r *http.Request) server.Actor {
+	if p := auth.FromContext(r.Context()); p != nil {
+		if p.DisplayName != "" {
+			return server.Actor(p.DisplayName)
+		}
+		if p.SubjectType == database.SubjectPasswordAdmin {
+			return "admin"
+		}
+	}
+	return "user"
+}
+
+// writeLifecycleError maps start/stop/restart failures to HTTP responses. Busy
+// responses carry the running operation so the UI can say what's happening.
+func writeLifecycleError(w http.ResponseWriter, err error) {
+	var busy *server.BusyError
+	if errors.As(err, &busy) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": busy.Error(), "op": string(busy.Op)})
+		return
+	}
+	var conflict *server.AffinityConflictError
+	if errors.As(err, &conflict) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 func StopServerHandler(w http.ResponseWriter, r *http.Request) {
@@ -557,8 +593,8 @@ func StopServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid server id")
 		return
 	}
-	if err := server.Default.Stop(id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if err := server.Default.Stop(id, requestActor(r)); err != nil {
+		writeLifecycleError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -570,8 +606,8 @@ func RestartServerHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid server id")
 		return
 	}
-	if err := server.Default.Restart(id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if err := server.Default.Restart(id, requestActor(r)); err != nil {
+		writeLifecycleError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

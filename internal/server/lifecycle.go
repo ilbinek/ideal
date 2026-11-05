@@ -1,0 +1,685 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"arma3modmanager/internal/contentver"
+	"arma3modmanager/internal/database"
+)
+
+// instState records who owns an instance's shutdown. The first claim wins, which
+// is how an exit we asked for is told apart from one we didn't.
+type instState int
+
+const (
+	instRunning instState = iota
+	instStopRequested
+	instExited
+)
+
+// defaultWatchInterval is how often watchServer checks a server.
+const defaultWatchInterval = 2 * time.Second
+
+// ExitEvent describes a server process going away without Ideal asking it to.
+type ExitEvent struct {
+	ServerID  int
+	StartedAt time.Time
+	At        time.Time
+	ExitCode  int
+	HasCode   bool
+}
+
+// launchedServer is a verified, running process that isn't registered yet.
+type launchedServer struct {
+	proc           *managedProc
+	startTime      time.Time
+	rptPath        string
+	sessionLog     *sessionLogWriter
+	sessionLogPath string
+	dockerMode     bool
+	containerID    string
+	resolveRPT     bool
+}
+
+// SetExitObserver registers a callback for unrequested exits. It must not block.
+func (m *Manager) SetExitObserver(fn func(ExitEvent)) {
+	m.hookMu.Lock()
+	defer m.hookMu.Unlock()
+	m.exitObserver = fn
+}
+
+func (m *Manager) notifyExit(ev ExitEvent) {
+	m.hookMu.Lock()
+	fn := m.exitObserver
+	m.hookMu.Unlock()
+	if fn != nil {
+		fn(ev)
+	}
+}
+
+func (m *Manager) launchFn() func(context.Context, int) (*launchedServer, error) {
+	if m.launcher != nil {
+		return m.launcher
+	}
+	return m.launchServer
+}
+
+func (m *Manager) terminateFn() func(context.Context, *runningInstance, *serverOp) error {
+	if m.terminator != nil {
+		return m.terminator
+	}
+	return terminateInstance
+}
+
+func (m *Manager) headlessStartFn() func(context.Context, int, int) error {
+	if m.headlessStarter != nil {
+		return m.headlessStarter
+	}
+	return m.startHeadlessCtx
+}
+
+// Start provisions and launches a server. It fails with *BusyError if another
+// lifecycle operation is in progress.
+func (m *Manager) Start(serverID int, by Actor) error {
+	op, running := m.tryBeginOp(serverID, OpStart, by)
+	if op == nil {
+		return &BusyError{Op: running.kind}
+	}
+	defer m.endOp(serverID, op)
+	return m.startInner(op, serverID)
+}
+
+func (m *Manager) startInner(op *serverOp, serverID int) error {
+	m.mu.Lock()
+	if _, running := m.instances[serverID]; running {
+		m.mu.Unlock()
+		return fmt.Errorf("server is already running")
+	}
+	m.mu.Unlock()
+
+	started, err := m.launchFn()(op.ctx, serverID)
+	if err != nil {
+		return err
+	}
+
+	gen := atomic.AddUint64(&nextInstanceGen, 1)
+	hcCtx, hcCancel := context.WithCancel(context.Background())
+	inst := &runningInstance{
+		serverID:       serverID,
+		gen:            gen,
+		pid:            started.proc.pid,
+		proc:           started.proc,
+		startedAt:      started.startTime,
+		rptPath:        started.rptPath,
+		sessionLog:     started.sessionLog,
+		sessionLogPath: started.sessionLogPath,
+		dockerMode:     started.dockerMode,
+		containerID:    started.containerID,
+		hcCtx:          hcCtx,
+		hcCancel:       hcCancel,
+		hcWG:           &sync.WaitGroup{},
+	}
+
+	m.mu.Lock()
+	m.instances[serverID] = inst
+	m.mu.Unlock()
+
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, started.proc.pid, started.rptPath)
+	m.broadcast()
+
+	go m.watchServer(serverID, gen)
+	if started.resolveRPT {
+		go m.resolveRPT(serverID, gen, started.startTime)
+	}
+
+	// Start configured headless clients after the dedicated server is up. Tracked
+	// on the instance so a stop can cancel this and wait for it, rather than have
+	// clients launching behind it.
+	inst.hcWG.Add(1)
+	go func() {
+		defer inst.hcWG.Done()
+		select {
+		case <-time.After(2 * time.Second):
+		case <-hcCtx.Done():
+			return
+		}
+		m.startAllHeadlessCtx(hcCtx, serverID)
+	}()
+	return nil
+}
+
+// launchServer does everything up to a verified running process: checks,
+// provisioning, spawning. It backs out cleanly when ctx is cancelled.
+func (m *Manager) launchServer(ctx context.Context, serverID int) (*launchedServer, error) {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return nil, err
+	}
+
+	branch, err := database.GetBranch(srv.BranchID)
+	if err != nil {
+		return nil, err
+	}
+	if !BranchIsInstalled(branch) {
+		return nil, fmt.Errorf("branch %q is not installed", branch.Name)
+	}
+
+	conflicts, err := database.GetServersUsingPort(srv.GamePort, srv.SteamPort, serverID)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range conflicts {
+		if c.Status == database.ServerStatusRunning || c.Status == database.ServerStatusStarting {
+			return nil, fmt.Errorf("port conflict with server %q", c.Name)
+		}
+	}
+	if err := waitForPortsFree(ctx, srv.GamePort, srv.SteamPort, 30*time.Second); err != nil {
+		if ctx.Err() != nil {
+			return nil, errStartCancelled(ctx.Err())
+		}
+		return nil, err
+	}
+
+	if err := FindRunningAffinityConflict(serverID, ParseAffinity(srv.CPUAffinity)); err != nil {
+		return nil, err
+	}
+
+	pins, err := contentver.CollectPinsForServer(serverID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect content pins: %w", err)
+	}
+	if err := database.ReplaceServerPins(serverID, pins); err != nil {
+		return nil, fmt.Errorf("failed to pin content versions: %w", err)
+	}
+
+	if err := ProvisionServer(serverID); err != nil {
+		_, _ = database.ClearServerPins(serverID)
+		return nil, err
+	}
+
+	launch, err := BuildLaunchArgs(serverID)
+	if err != nil {
+		_, _ = database.ClearServerPins(serverID)
+		return nil, err
+	}
+
+	// Last chance to back out before anything is spawned.
+	if err := ctx.Err(); err != nil {
+		_, _ = database.ClearServerPins(serverID)
+		return nil, errStartCancelled(err)
+	}
+
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusStarting, 0, "")
+	m.broadcast()
+
+	abort := func() {
+		_, _ = database.ClearServerPins(serverID)
+		_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, "")
+		m.broadcast()
+	}
+
+	startTime := time.Now()
+	if err := os.MkdirAll(filepath.Join(InstanceDir(srv.Slug), "logs"), 0755); err != nil {
+		abort()
+		return nil, fmt.Errorf("failed to create logs directory: %w", err)
+	}
+	sessionLogPath := filepath.Join(InstanceDir(srv.Slug), "logs",
+		fmt.Sprintf("session-%s.log", startTime.Format("2006-01-02_150405")))
+	sessionFile, err := os.OpenFile(sessionLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		abort()
+		return nil, fmt.Errorf("failed to create session log: %w", err)
+	}
+	sessionLog := newSessionLogWriter(sessionFile, 512*1024)
+
+	useDocker, dockerErr := dockerModeForStart()
+	if dockerErr != nil {
+		_ = sessionLog.Close()
+		abort()
+		return nil, dockerErr
+	}
+	var (
+		proc        *managedProc
+		containerID string
+		startErr    error
+	)
+	if useDocker {
+		// Close Ideal's write handle so the container can append freely; live
+		// tail and historic reads use the on-disk session file under logs/.
+		_ = sessionLog.Close()
+		sessionLog = nil
+		extraMounts := CollectDockerExtraMounts(serverID)
+		containerID, proc, startErr = startDockerServer(
+			serverID, launch.Binary, launch.Args, launch.WorkingDir, sessionLogPath,
+			srv.CPUAffinity, srv.MemoryLimitMB, extraMounts,
+		)
+	} else {
+		proc, startErr = startProcess(launch.Binary, launch.Args, launch.WorkingDir, sessionLog)
+	}
+	if startErr != nil {
+		_ = sessionLog.Close()
+		abort()
+		return nil, startErr
+	}
+
+	// Persist the PID right away: if Ideal dies during the verify window below,
+	// the next run can still find and adopt this process.
+	createMs := int64(0)
+	if !useDocker {
+		createMs = captureCreateMs(proc.pid)
+	}
+	_ = database.UpdateServerProcess(serverID, database.ServerStatusStarting, proc.pid, createMs, "")
+
+	if !useDocker {
+		if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
+			log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
+		}
+		if err := ApplyServerMemoryLimit(serverID, proc.pid, srv.MemoryLimitMB); err != nil {
+			log.Printf("[SERVER] memory limit warning for %d: %v", serverID, err)
+		}
+	}
+
+	// Confirm the process did not die immediately (e.g. port still held on UDP).
+	if err := verifyProcessStartup(ctx, proc, srv.GamePort, 8*time.Second); err != nil {
+		if useDocker {
+			_ = stopDockerContainer(serverID, sessionLogPath)
+		} else {
+			_ = stopProcess(proc.pid)
+		}
+		_ = proc.wait(5 * time.Second)
+		_ = sessionLog.Close()
+		abort()
+		log.Printf("[SERVER] start failed for %d: %v", serverID, err)
+		return nil, err
+	}
+
+	// Linux Arma prints RPT to stdout (captured into the session log under Docker).
+	// Point ActiveRPT at that file so live tail and the log list stay in sync.
+	rptPath := ResolveRPTPath(srv.Slug, "")
+	if useDocker {
+		rptPath = sessionLogPath
+	}
+	return &launchedServer{
+		proc:           proc,
+		startTime:      startTime,
+		rptPath:        rptPath,
+		sessionLog:     sessionLog,
+		sessionLogPath: sessionLogPath,
+		dockerMode:     useDocker,
+		containerID:    containerID,
+		resolveRPT:     !useDocker,
+	}, nil
+}
+
+func waitForPortsFree(ctx context.Context, gamePort, steamPort int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		gameFree := IsPortAvailable(gamePort)
+		steamFree := IsPortAvailable(steamPort)
+		if gameFree && steamFree {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if !gameFree {
+				return fmt.Errorf("game port %d is not available", gamePort)
+			}
+			return fmt.Errorf("steam port %d is not available", steamPort)
+		}
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// verifyProcessStartup ensures the child did not exit right away. Prefer seeing
+// the game port bind; if Arma is still starting after timeout, allow it.
+func verifyProcessStartup(ctx context.Context, proc *managedProc, gamePort int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	sawAlive := false
+	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return errStartCancelled(err)
+		}
+		if !proc.exited() {
+			sawAlive = true
+			if IsPortInUse(gamePort) {
+				return nil
+			}
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		// Process exited. If something else (or a child) holds the port, treat as OK.
+		if IsPortInUse(gamePort) {
+			return nil
+		}
+		if sawAlive {
+			return fmt.Errorf("server process exited immediately after start (check session log / ports)")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if proc.exited() && !IsPortInUse(gamePort) {
+		return fmt.Errorf("server process exited immediately after start (check session log / ports)")
+	}
+	return nil
+}
+
+// Stop shuts a server down, preempting a start that is still in progress and
+// joining a stop that is already running.
+func (m *Manager) Stop(serverID int, by Actor) error {
+	return m.requestStop(serverID, by, false)
+}
+
+// ForceStop kills a server immediately, overriding any graceful stop underway.
+func (m *Manager) ForceStop(serverID int, by Actor) error {
+	return m.requestStop(serverID, by, true)
+}
+
+func (m *Manager) requestStop(serverID int, by Actor, force bool) error {
+	for {
+		op, running := m.tryBeginOp(serverID, OpStop, by)
+		if op != nil {
+			op.forced.Store(force)
+			defer m.endOp(serverID, op)
+			return m.stopInner(op, serverID)
+		}
+		switch running.kind {
+		case OpDelete:
+			return &BusyError{Op: running.kind}
+		case OpStart:
+			running.cancel()
+		case OpRestart:
+			running.skipStart.Store(true)
+			if opPhase(running.phase.Load()) == phaseStarting || force {
+				running.forced.Store(force)
+				running.cancel()
+			}
+		case OpStop:
+			if force {
+				running.forced.Store(true)
+				running.cancel()
+			}
+		}
+		<-running.done
+	}
+}
+
+// claimStop marks the instance as being stopped by an operation. It reports the
+// instance, and whether the watcher got there first because it already exited.
+func (m *Manager) claimStop(serverID int) (inst *runningInstance, alreadyExited bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[serverID]
+	if !ok {
+		return nil, false
+	}
+	if inst.state == instExited {
+		return inst, true
+	}
+	inst.state = instStopRequested
+	return inst, false
+}
+
+func (m *Manager) claimExit(serverID int, gen uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[serverID]
+	if !ok || inst.gen != gen || inst.state != instRunning {
+		return false
+	}
+	inst.state = instExited
+	return true
+}
+
+// stopHeadlessFor cancels any pending auto-start, waits for it to finish, then
+// stops the clients. Only after this can no new client appear.
+func (m *Manager) stopHeadlessFor(serverID int, inst *runningInstance) {
+	if inst != nil && inst.hcCancel != nil {
+		inst.hcCancel()
+		inst.hcWG.Wait()
+	}
+	m.StopAllHeadless(serverID)
+}
+
+// removeInstance drops the instance from tracking. Idempotent by generation.
+func (m *Manager) removeInstance(inst *runningInstance) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.instances[inst.serverID]
+	if !ok || cur.gen != inst.gen {
+		return false
+	}
+	m.closeInstanceLog(cur)
+	delete(m.instances, inst.serverID)
+	return true
+}
+
+func (m *Manager) markStopped(serverID int, activeRPT string) {
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, activeRPT)
+	ReleaseServerMemoryLimit(serverID)
+	if pins, err := database.ClearServerPins(serverID); err == nil {
+		contentver.GCReleasedPins(pins)
+	}
+	m.broadcast()
+}
+
+func (m *Manager) stopInner(op *serverOp, serverID int) error {
+	inst, alreadyExited := m.claimStop(serverID)
+	if inst == nil {
+		m.StopAllHeadless(serverID)
+		return m.stopOrphan(serverID)
+	}
+	if alreadyExited {
+		// It died on its own just before we got here, so it still counts as an exit
+		// nobody asked for. The stop itself has nothing left to do.
+		m.finishExited(inst)
+		return nil
+	}
+
+	m.stopHeadlessFor(serverID, inst)
+
+	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopping, inst.pid, inst.rptPath)
+	m.broadcast()
+
+	srv, _ := database.GetServer(serverID)
+	gamePort, steamPort := 0, 0
+	if srv != nil {
+		gamePort = srv.GamePort
+		steamPort = srv.SteamPort
+	}
+
+	if stopErr := m.terminateFn()(op.ctx, inst, op); stopErr != nil {
+		stillAlive := false
+		if inst.dockerMode {
+			stillAlive = dockerContainerRunning(serverID)
+		} else {
+			stillAlive = !inst.proc.exited() && ServerAlive(inst.pid, gamePort)
+		}
+		if stillAlive {
+			// Still running — revert so status cannot stay stuck on "stopping".
+			m.mu.Lock()
+			inst.state = instRunning
+			m.mu.Unlock()
+			_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, inst.pid, inst.rptPath)
+			m.broadcast()
+			return stopErr
+		}
+		// Process already gone; treat as a successful stop.
+	}
+
+	// Wait until stdout/stderr pipes are fully drained before closing the log.
+	_ = inst.proc.wait(30 * time.Second)
+	m.removeInstance(inst)
+
+	if gamePort > 0 {
+		_ = waitForPortsFree(context.Background(), gamePort, steamPort, 30*time.Second)
+	}
+	m.markStopped(serverID, inst.rptPath)
+	return nil
+}
+
+// terminateInstance ends the process behind an instance.
+func terminateInstance(_ context.Context, inst *runningInstance, _ *serverOp) error {
+	if inst.dockerMode {
+		return stopDockerContainer(inst.serverID, inst.sessionLogPath)
+	}
+	return stopProcess(inst.pid)
+}
+
+// stopOrphan clears status for a server not tracked in-memory (e.g. after restart).
+func (m *Manager) stopOrphan(serverID int) error {
+	srv, err := database.GetServer(serverID)
+	if err != nil {
+		return err
+	}
+	if _, _, running, _ := findDockerContainer(serverID); running || dockerContainerRunning(serverID) {
+		_ = stopDockerContainer(serverID, latestSessionLogPath(srv.Slug))
+	} else {
+		switch identifyServerPID(srv) {
+		case identityMatch:
+			if err := stopProcess(srv.PID); err != nil && processRunning(srv.PID) {
+				return err
+			}
+		case identityUnknown:
+			return fmt.Errorf("cannot verify that process %d belongs to this server, so it was not stopped", srv.PID)
+		case identityMismatch:
+			log.Printf("[SERVER] not stopping pid=%d: it no longer belongs to server %d", srv.PID, serverID)
+		}
+	}
+	_ = waitForPortsFree(context.Background(), srv.GamePort, srv.SteamPort, 15*time.Second)
+	m.markStopped(serverID, srv.ActiveRPT)
+	return nil
+}
+
+// Restart stops then starts a server.
+func (m *Manager) Restart(serverID int, by Actor) error {
+	op, running := m.tryBeginOp(serverID, OpRestart, by)
+	if op == nil {
+		return &BusyError{Op: running.kind}
+	}
+	defer m.endOp(serverID, op)
+	if err := m.stopInner(op, serverID); err != nil {
+		return err
+	}
+	if op.skipStart.Load() {
+		return nil
+	}
+	op.phase.Store(int32(phaseStarting))
+	if err := op.ctx.Err(); err != nil {
+		return errStartCancelled(err)
+	}
+	return m.startInner(op, serverID)
+}
+
+func (m *Manager) watchServer(serverID int, gen uint64) {
+	const deadThreshold = 2
+
+	interval := m.watchInterval
+	if interval <= 0 {
+		interval = defaultWatchInterval
+	}
+
+	consecutiveDead := 0
+	for {
+		time.Sleep(interval)
+
+		m.mu.Lock()
+		inst, tracked := m.instances[serverID]
+		sameGen := tracked && inst.gen == gen
+		var proc *managedProc
+		var pid int
+		state := instRunning
+		if sameGen {
+			proc = inst.proc
+			pid = inst.pid
+			state = inst.state
+		}
+		m.mu.Unlock()
+		if !tracked || !sameGen {
+			// Stop/Restart already replaced or removed this instance.
+			return
+		}
+		if state != instRunning {
+			// An operation owns this shutdown and removes the instance when done. Keep
+			// watching rather than returning: a failed stop hands it back to us.
+			consecutiveDead = 0
+			m.broadcast()
+			continue
+		}
+
+		srv, err := database.GetServer(serverID)
+		if err != nil {
+			return
+		}
+
+		// Prefer the Wait() result: once reaped, the PID is gone. Port fallback
+		// still covers Arma leaving a child bound after the launcher exits.
+		if proc != nil && proc.exited() {
+			if IsPortInUse(srv.GamePort) {
+				consecutiveDead = 0
+				m.broadcast()
+				continue
+			}
+		} else if ServerAlive(pid, srv.GamePort) {
+			consecutiveDead = 0
+			m.broadcast()
+			continue
+		}
+
+		consecutiveDead++
+		if consecutiveDead < deadThreshold {
+			continue
+		}
+		if m.claimExit(serverID, gen) {
+			break
+		}
+		// A stop claimed it first; it's handling this now.
+		consecutiveDead = 0
+	}
+
+	// Cleanup runs as an operation so it can't race a start's content pins.
+	op, err := m.waitAndBeginOp(context.Background(), serverID, OpCleanup, ActorSystem)
+	if err != nil {
+		return
+	}
+	defer m.endOp(serverID, op)
+
+	m.mu.Lock()
+	inst, ok := m.instances[serverID]
+	m.mu.Unlock()
+	if ok && inst.gen == gen {
+		m.finishExited(inst)
+	}
+}
+
+// finishExited cleans up after a process that exited on its own, then reports it.
+// The caller holds the server's op.
+func (m *Manager) finishExited(inst *runningInstance) {
+	if inst.proc != nil {
+		_ = inst.proc.wait(30 * time.Second)
+	}
+	if !m.removeInstance(inst) {
+		return
+	}
+	m.stopHeadlessFor(inst.serverID, inst)
+
+	activeRPT := inst.rptPath
+	if srv, err := database.GetServer(inst.serverID); err == nil {
+		activeRPT = srv.ActiveRPT
+	}
+	m.markStopped(inst.serverID, activeRPT)
+
+	ev := ExitEvent{ServerID: inst.serverID, StartedAt: inst.startedAt, At: time.Now()}
+	if inst.proc != nil {
+		ev.ExitCode, ev.HasCode = inst.proc.exitCode()
+	}
+	m.notifyExit(ev)
+}
