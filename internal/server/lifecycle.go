@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -89,12 +91,60 @@ func (m *Manager) headlessStartFn() func(context.Context, int, int) error {
 // Start provisions and launches a server. It fails with *BusyError if another
 // lifecycle operation is in progress.
 func (m *Manager) Start(serverID int, by Actor) error {
-	op, running := m.tryBeginOp(serverID, OpStart, by)
+	op, running := m.tryBeginOp(serverID, OpStart, by, func(claimed bool) {
+		if claimed && by != ActorSystem {
+			logIntentError(serverID, database.RecordManualStart(serverID))
+		}
+	})
 	if op == nil {
 		return &BusyError{Op: running.kind}
 	}
 	defer m.endOp(serverID, op)
-	return m.startInner(op, serverID)
+	err := m.startInner(op, serverID)
+	if err != nil {
+		recordEvent(serverID, database.EventStartFailed, by, err.Error())
+		return err
+	}
+	recordEvent(serverID, database.EventStarted, by, "")
+	return nil
+}
+
+func logIntentError(serverID int, err error) {
+	if err != nil {
+		log.Printf("[SERVER] could not record intent for server %d: %v", serverID, err)
+	}
+}
+
+// recordEvent adds to a server's history. A failure here mustn't affect the server.
+func recordEvent(serverID int, kind string, by Actor, detail string) {
+	if err := database.AddServerEvent(serverID, kind, string(by), detail); err != nil {
+		log.Printf("[SERVER] could not record %s event for server %d: %v", kind, serverID, err)
+	}
+}
+
+func pinsSignature(pins []database.ServerContentPin) string {
+	parts := make([]string, 0, len(pins))
+	for _, p := range pins {
+		parts = append(parts, fmt.Sprintf("%s/%d/%d", p.Kind, p.RefID, p.Generation))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// noteContentChange records when a server came up on different mods or game files
+// than its last run, which is easy to miss when the restart was automatic.
+func (m *Manager) noteContentChange(serverID int) {
+	pins, err := database.GetServerPins(serverID)
+	if err != nil || len(pins) == 0 {
+		return
+	}
+	current := pinsSignature(pins)
+	m.hookMu.Lock()
+	previous := m.lastPins[serverID]
+	m.hookMu.Unlock()
+	if previous != "" && previous != current {
+		recordEvent(serverID, database.EventContentChanged, ActorSystem, "started on newer mods or game files than its last run")
+	}
 }
 
 func (m *Manager) startInner(op *serverOp, serverID int) error {
@@ -134,6 +184,7 @@ func (m *Manager) startInner(op *serverOp, serverID int) error {
 
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusRunning, started.proc.pid, started.rptPath)
 	m.broadcast()
+	m.noteContentChange(serverID)
 
 	go m.watchServer(serverID, gen)
 	if started.resolveRPT {
@@ -425,12 +476,28 @@ func (m *Manager) ForceStop(serverID int, by Actor) error {
 }
 
 func (m *Manager) requestStop(serverID int, by Actor, force bool) error {
+	if force {
+		recordEvent(serverID, database.EventForceStop, by, "")
+	}
 	for {
-		op, running := m.tryBeginOp(serverID, OpStop, by)
+		// Recorded before any signal goes out, and whether or not this claims the op:
+		// a person wants this server off from this moment on.
+		op, running := m.tryBeginOp(serverID, OpStop, by, func(bool) {
+			if by != ActorSystem {
+				logIntentError(serverID, database.RecordManualStop(serverID))
+			}
+		})
 		if op != nil {
 			op.forced.Store(force)
 			defer m.endOp(serverID, op)
-			return m.stopInner(op, serverID)
+			wasUp := m.serverIsUp(serverID)
+			err := m.stopInner(op, serverID)
+			if err != nil {
+				recordEvent(serverID, database.EventStopFailed, by, err.Error())
+			} else if wasUp {
+				recordEvent(serverID, database.EventStopped, by, "")
+			}
+			return err
 		}
 		switch running.kind {
 		case OpDelete:
@@ -451,6 +518,19 @@ func (m *Manager) requestStop(serverID int, by Actor, force bool) error {
 		}
 		<-running.done
 	}
+}
+
+// serverIsUp reports whether there's anything for a stop to do. It tells a real stop
+// from one that merely joined a stop that has already finished.
+func (m *Manager) serverIsUp(serverID int) bool {
+	m.mu.Lock()
+	_, tracked := m.instances[serverID]
+	m.mu.Unlock()
+	if tracked {
+		return true
+	}
+	srv, err := database.GetServer(serverID)
+	return err == nil && srv.Status != database.ServerStatusStopped
 }
 
 // claimStop marks the instance as being stopped by an operation. It reports the
@@ -507,6 +587,14 @@ func (m *Manager) markStopped(serverID int, activeRPT string) {
 	_ = database.UpdateServerStatus(serverID, database.ServerStatusStopped, 0, activeRPT)
 	ReleaseServerMemoryLimit(serverID)
 	if pins, err := database.ClearServerPins(serverID); err == nil {
+		if len(pins) > 0 {
+			m.hookMu.Lock()
+			if m.lastPins == nil {
+				m.lastPins = make(map[int]string)
+			}
+			m.lastPins[serverID] = pinsSignature(pins)
+			m.hookMu.Unlock()
+		}
 		contentver.GCReleasedPins(pins)
 	}
 	m.broadcast()
@@ -598,22 +686,46 @@ func (m *Manager) stopOrphan(serverID int) error {
 
 // Restart stops then starts a server.
 func (m *Manager) Restart(serverID int, by Actor) error {
-	op, running := m.tryBeginOp(serverID, OpRestart, by)
+	op, running := m.tryBeginOp(serverID, OpRestart, by, func(claimed bool) {
+		if claimed && by != ActorSystem {
+			logIntentError(serverID, database.RecordManualRestart(serverID))
+		}
+	})
 	if op == nil {
 		return &BusyError{Op: running.kind}
 	}
 	defer m.endOp(serverID, op)
+	attempted, err := m.restartInner(op, serverID)
+	// The start half has now run, or never will. Either way nothing is owed. If a
+	// Stop overrode this restart it has already cleared this too.
+	logIntentError(serverID, database.SetOwedStart(serverID, database.OwedNone))
+	switch {
+	case err == nil && attempted:
+		recordEvent(serverID, database.EventRestarted, by, "")
+	case err == nil:
+		recordEvent(serverID, database.EventStopped, by, "restart cancelled")
+	case attempted:
+		recordEvent(serverID, database.EventStartFailed, by, err.Error())
+	default:
+		recordEvent(serverID, database.EventStopFailed, by, err.Error())
+	}
+	return err
+}
+
+// restartInner runs the two halves of a restart. attempted says whether the start
+// half ran, which tells a failed start from a failed stop.
+func (m *Manager) restartInner(op *serverOp, serverID int) (attempted bool, err error) {
 	if err := m.stopInner(op, serverID); err != nil {
-		return err
+		return false, err
 	}
 	if op.skipStart.Load() {
-		return nil
+		return false, nil
 	}
 	op.phase.Store(int32(phaseStarting))
 	if err := op.ctx.Err(); err != nil {
-		return errStartCancelled(err)
+		return true, errStartCancelled(err)
 	}
-	return m.startInner(op, serverID)
+	return true, m.startInner(op, serverID)
 }
 
 func (m *Manager) watchServer(serverID int, gen uint64) {
@@ -687,8 +799,11 @@ func (m *Manager) watchServer(serverID int, gen uint64) {
 				continue
 			}
 			if portSt == portForeign || portSt == portOwnerUnknown {
+				holder := describePortHolder(srv.GamePort)
 				log.Printf("[SERVER] server %d exited and something else holds game port %d%s",
-					serverID, srv.GamePort, describePortHolder(srv.GamePort))
+					serverID, srv.GamePort, holder)
+				recordEvent(serverID, database.EventPortHeld, ActorSystem,
+					fmt.Sprintf("game port %d is in use by something else%s", srv.GamePort, holder))
 			}
 		}
 
@@ -755,5 +870,10 @@ func (m *Manager) finishExited(inst *runningInstance) {
 	if inst.proc != nil {
 		ev.ExitCode, ev.HasCode = inst.proc.exitCode()
 	}
+	detail := ""
+	if ev.HasCode {
+		detail = fmt.Sprintf("exit code %d", ev.ExitCode)
+	}
+	recordEvent(inst.serverID, database.EventExited, ActorSystem, detail)
 	m.notifyExit(ev)
 }

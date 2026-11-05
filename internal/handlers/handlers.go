@@ -93,6 +93,12 @@ func APIHandler() http.Handler {
 	mux.HandleFunc("POST /api/servers/{id}/stop", apiServerAdmin(StopServerHandler))
 	mux.HandleFunc("POST /api/servers/{id}/restart", apiServerAdmin(RestartServerHandler))
 	mux.HandleFunc("POST /api/servers/{id}/force-stop", apiServerAdmin(ForceStopServerHandler))
+	mux.HandleFunc("GET /api/servers/{id}/automation", apiServerAdmin(GetServerAutomationHandler))
+	mux.HandleFunc("PUT /api/servers/{id}/automation", apiServerAdmin(PutServerAutomationHandler))
+	mux.HandleFunc("POST /api/servers/{id}/automation/rcon/generate", apiServerAdmin(GenerateRConHandler))
+	mux.HandleFunc("GET /api/servers/{id}/events", apiServerAdmin(ListServerEventsHandler))
+	mux.HandleFunc("GET /api/settings/automation", apiFullAdmin(GetAutomationSettingsHandler))
+	mux.HandleFunc("PUT /api/settings/automation", apiFullAdmin(PutAutomationSettingsHandler))
 	mux.HandleFunc("GET /api/servers/{id}/status", apiServerAdmin(ServerStatusHandler))
 	mux.HandleFunc("GET /api/servers/{id}/launch", apiServerAdmin(ServerLaunchPreviewHandler))
 

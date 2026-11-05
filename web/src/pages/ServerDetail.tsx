@@ -45,6 +45,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
+import { AutomationTab } from "@/components/AutomationTab";
 import {
   Dialog,
   DialogContent,
@@ -67,7 +68,7 @@ import {
   type ServerCfgSimpleForm,
 } from "@/lib/serverCfg";
 
-type Tab = "overview" | "mods" | "keys" | "config" | "logs" | "headless" | "missions";
+type Tab = "overview" | "mods" | "keys" | "config" | "logs" | "headless" | "missions" | "automation";
 
 type ModLoadMode = "client" | "server" | "optional";
 
@@ -328,6 +329,7 @@ export function ServerDetail() {
     { id: "logs", label: "Logs" },
     { id: "headless", label: "Headless Clients" },
     { id: "missions", label: "Missions" },
+    { id: "automation", label: "Automation" },
   ];
 
   if (server.isLoading) {
@@ -473,6 +475,7 @@ export function ServerDetail() {
         <HeadlessTab serverId={serverId} serverRunning={isRunning} />
       )}
       {tab === "missions" && <MissionsTab serverId={serverId} srv={srv} />}
+      {tab === "automation" && <AutomationTab serverId={serverId} />}
     </div>
   );
 }

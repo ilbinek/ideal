@@ -455,3 +455,165 @@ func TestForeignPortHolderDoesNotKeepServerRunning(t *testing.T) {
 		t.Fatalf("status %q", got)
 	}
 }
+
+func (f *lifecycleFixture) automation(t *testing.T) *database.ServerAutomation {
+	t.Helper()
+	a, err := database.GetServerAutomation(f.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func (f *lifecycleFixture) eventKinds(t *testing.T) []string {
+	t.Helper()
+	events, err := database.ListServerEvents(f.id, 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := make([]string, 0, len(events))
+	for i := len(events) - 1; i >= 0; i-- {
+		kinds = append(kinds, events[i].Kind)
+	}
+	return kinds
+}
+
+// If Ideal dies mid-stop, the record that someone wanted this off must already exist.
+func TestManualStopPersistsBeforeSignal(t *testing.T) {
+	f := newLifecycleFixture(t)
+	if err := f.m.Start(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if f.automation(t).UserStopped {
+		t.Fatal("start shouldn't set the stopped flag")
+	}
+	var atSignal bool
+	f.m.terminator = func(context.Context, *runningInstance, *serverOp) error {
+		atSignal = f.automation(t).UserStopped
+		f.exitProcess()
+		return nil
+	}
+	if err := f.m.Stop(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if !atSignal {
+		t.Fatal("stopped flag wasn't persisted before the stop signal")
+	}
+	if err := f.m.Start(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if f.automation(t).UserStopped {
+		t.Fatal("starting should clear the stopped flag")
+	}
+	if err := f.m.Stop(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSystemActionsDontRecordIntent(t *testing.T) {
+	f := newLifecycleFixture(t)
+	if err := f.m.Start(f.id, ActorSystem); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.Stop(f.id, ActorSystem); err != nil {
+		t.Fatal(err)
+	}
+	if f.automation(t).UserStopped {
+		t.Fatal("Ideal stopping a server isn't a person asking for it to stay off")
+	}
+}
+
+func TestStopDuringStartKeepsServerOff(t *testing.T) {
+	f := newLifecycleFixture(t)
+	entered := make(chan struct{})
+	f.m.launcher = func(ctx context.Context, _ int) (*launchedServer, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, errStartCancelled(ctx.Err())
+	}
+	startErr := make(chan error, 1)
+	go func() { startErr <- f.m.Start(f.id, "alice") }()
+	<-entered
+	if err := f.m.Stop(f.id, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	<-startErr
+	if !f.automation(t).UserStopped {
+		t.Fatal("the later Stop must win over the Start it cancelled")
+	}
+}
+
+func TestRestartClearsOwedStart(t *testing.T) {
+	f := newLifecycleFixture(t)
+	if err := f.m.Start(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	var owedDuringStop string
+	f.m.terminator = func(context.Context, *runningInstance, *serverOp) error {
+		owedDuringStop = f.automation(t).OwedStart
+		f.exitProcess()
+		return nil
+	}
+	if err := f.m.Restart(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if owedDuringStop != database.OwedManual {
+		t.Fatalf("owed during the stop half: %q", owedDuringStop)
+	}
+	if a := f.automation(t); a.OwedStart != database.OwedNone || a.UserStopped {
+		t.Fatalf("after restart: %+v", a)
+	}
+	if err := f.m.Stop(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEventHistory(t *testing.T) {
+	f := newLifecycleFixture(t)
+	if err := f.m.Start(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.Stop(f.id, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	// Stopping a server that's already down changes nothing, so it isn't an event.
+	if err := f.m.Stop(f.id, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.Start(f.id, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.exitProcess()
+	waitFor(t, "exit", func() bool { return f.exits.Load() == 1 })
+
+	got := f.eventKinds(t)
+	want := []string{database.EventStarted, database.EventStopped, database.EventStarted, database.EventExited}
+	if len(got) != len(want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("events %v, want %v", got, want)
+		}
+	}
+	events, err := database.ListServerEvents(f.id, 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop := events[len(events)-2]; stop.Actor != "bob" {
+		t.Fatalf("stop attributed to %q", stop.Actor)
+	}
+}
+
+func TestStartFailureRecorded(t *testing.T) {
+	f := newLifecycleFixture(t)
+	f.m.launcher = func(context.Context, int) (*launchedServer, error) {
+		return nil, errors.New("branch is not installed")
+	}
+	if err := f.m.Start(f.id, "alice"); err == nil {
+		t.Fatal("expected failure")
+	}
+	if got := f.eventKinds(t); len(got) != 1 || got[0] != database.EventStartFailed {
+		t.Fatalf("events %v", got)
+	}
+}

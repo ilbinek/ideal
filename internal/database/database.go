@@ -137,6 +137,9 @@ func migrate() error {
 	if err := migrateGenerations(); err != nil {
 		return err
 	}
+	if err := migrateAutomation(); err != nil {
+		return err
+	}
 	return migrateUsers()
 }
 

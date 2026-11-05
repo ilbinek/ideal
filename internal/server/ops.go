@@ -71,14 +71,25 @@ func (e *BusyError) Error() string {
 
 // tryBeginOp claims the server for an operation. When another is running, it
 // returns that operation instead.
-func (m *Manager) tryBeginOp(serverID int, kind OpKind, by Actor) (op, running *serverOp) {
+//
+// intent, if given, records what a person asked for. It runs in the same critical
+// section as the claim, so competing requests apply their intent in the same order
+// they take effect: a Stop can't have its "stay off" overwritten by a Start that
+// it then cancels.
+func (m *Manager) tryBeginOp(serverID int, kind OpKind, by Actor, intent func(claimed bool)) (op, running *serverOp) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	if m.ops == nil {
 		m.ops = make(map[int]*serverOp)
 	}
 	if cur, ok := m.ops[serverID]; ok {
+		if intent != nil {
+			intent(false)
+		}
 		return nil, cur
+	}
+	if intent != nil {
+		intent(true)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	op = &serverOp{kind: kind, by: by, ctx: ctx, cancel: cancel, done: make(chan struct{})}
@@ -92,7 +103,7 @@ func (m *Manager) tryBeginOp(serverID int, kind OpKind, by Actor) (op, running *
 // waitAndBeginOp claims the server, waiting out whatever is running first.
 func (m *Manager) waitAndBeginOp(ctx context.Context, serverID int, kind OpKind, by Actor) (*serverOp, error) {
 	for {
-		op, running := m.tryBeginOp(serverID, kind, by)
+		op, running := m.tryBeginOp(serverID, kind, by, nil)
 		if op != nil {
 			return op, nil
 		}
@@ -127,7 +138,7 @@ func (m *Manager) CurrentOp(serverID int) OpKind {
 // BeginExclusive holds off all lifecycle operations until the returned function
 // runs. Used for changes like deleting a server.
 func (m *Manager) BeginExclusive(serverID int, kind OpKind, by Actor) (func(), error) {
-	op, running := m.tryBeginOp(serverID, kind, by)
+	op, running := m.tryBeginOp(serverID, kind, by, nil)
 	if op == nil {
 		return nil, &BusyError{Op: running.kind}
 	}

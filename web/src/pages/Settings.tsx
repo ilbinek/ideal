@@ -17,8 +17,19 @@ import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { SteamLogin } from "@/components/SteamLogin";
 import { PageHeader } from "@/components/PageHeader";
+import { AutomationSettingsCard } from "@/components/AutomationSettingsCard";
 
 export function SettingsPage() {
+  return (
+    <div className="flex flex-col gap-6">
+      <SettingsForm />
+      {/* Outside the form: it saves on its own, so Enter here can't submit the rest. */}
+      <AutomationSettingsCard />
+    </div>
+  );
+}
+
+function SettingsForm() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { data } = useQuery({ queryKey: ["settings"], queryFn: () => api.getSettings() });

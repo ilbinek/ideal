@@ -26,6 +26,7 @@ type StatusSnapshot struct {
 	StartedAt time.Time                `json:"startedAt,omitempty"`
 	Metrics   *ProcessMetrics          `json:"metrics,omitempty"`
 	Headless  []HeadlessStatusSnapshot `json:"headless,omitempty"`
+	Op        string                   `json:"op,omitempty"` // lifecycle operation in progress
 }
 
 // AllStatusSnapshot is broadcast to SSE subscribers.
@@ -47,6 +48,7 @@ type Manager struct {
 
 	hookMu       sync.Mutex
 	exitObserver func(ExitEvent)
+	lastPins     map[int]string // content each server last ran, to spot changes
 
 	// Test seams; nil means the real implementation.
 	launcher        func(context.Context, int) (*launchedServer, error)
@@ -128,8 +130,11 @@ func ReconcileStatuses() (resumeStops []int) {
 				servers[i] = s
 				identity = identityMatch
 			} else if portSt != portFree {
+				holder := describePortHolder(s.GamePort)
 				log.Printf("[SERVER] game port %d of server %d (%s) is in use by something else%s",
-					s.GamePort, s.ID, s.Slug, describePortHolder(s.GamePort))
+					s.GamePort, s.ID, s.Slug, holder)
+				recordEvent(s.ID, database.EventPortHeld, ActorSystem,
+					fmt.Sprintf("game port %d is in use by something else%s", s.GamePort, holder))
 			}
 		}
 		alive := dockerUp || identity == identityMatch
@@ -137,6 +142,8 @@ func ReconcileStatuses() (resumeStops []int) {
 			// A live process we can't inspect: don't adopt it, don't kill it, and
 			// don't call it stopped. Stop explains, and a later run re-checks.
 			log.Printf("[SERVER] cannot verify pid=%d for server %d (%s); leaving it alone", s.PID, s.ID, s.Slug)
+			recordEvent(s.ID, database.EventIdentityUnknown, ActorSystem,
+				fmt.Sprintf("could not verify that process %d belongs to this server, so it was left alone", s.PID))
 			if s.Status != database.ServerStatusStopped {
 				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
 			}
@@ -367,6 +374,7 @@ func (m *Manager) Snapshot() AllStatusSnapshot {
 			Status:    s.Status,
 			PID:       s.PID,
 			ActiveRPT: s.ActiveRPT,
+			Op:        string(m.CurrentOp(s.ID)),
 		}
 		if inst, ok := m.instances[s.ID]; ok {
 			snap.PID = inst.pid

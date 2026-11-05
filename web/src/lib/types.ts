@@ -280,6 +280,67 @@ export interface ServerStatusSnapshot {
   startedAt?: string;
   metrics?: ProcessMetrics;
   headless?: HeadlessClientSnapshot[];
+  /** Lifecycle operation in progress. */
+  op?: string;
+  /** Unix seconds of the next automatic restart attempt. */
+  retryAt?: number;
+  /** Recent failed runs counted towards giving up. */
+  failures?: number;
+  gaveUp?: boolean;
+  /** Stopped on purpose, so it stays off when Ideal launches. */
+  userStopped?: boolean;
+  /** Unix seconds of the next planned restart. */
+  nextRestartAt?: number;
+  /** All automation is paused globally. */
+  paused?: boolean;
+}
+
+export interface RestartSlot {
+  /** Minute of the day, UTC. */
+  m: number;
+  /** Weekday mask in UTC, bit 0 = Sunday. */
+  d: number;
+}
+
+export interface RConStatus {
+  configured: boolean;
+  port: number;
+  source: string;
+  battleyeEnabled: boolean;
+  restrictRcon: string;
+}
+
+export interface ServerAutomationSettings {
+  autostart: boolean;
+  restartOnCrash: boolean;
+  scheduleEnabled: boolean;
+  warnMinutes: number[];
+  restartSlots: RestartSlot[];
+}
+
+export interface ServerAutomation extends ServerAutomationSettings {
+  serverId: number;
+  userStopped: boolean;
+  /** Unix seconds, 0 if Ideal hasn't given up on it. */
+  gaveUpAt: number;
+  failures: number;
+  rcon: RConStatus;
+}
+
+export interface AutomationSettings {
+  paused: boolean;
+  bootDelaySec: number;
+  bootGapSec: number;
+  warningTemplate: string;
+}
+
+export interface ServerEvent {
+  id: number;
+  serverId: number;
+  at: string;
+  kind: string;
+  actor: string;
+  detail: string;
 }
 
 export interface AllServersSnapshot {

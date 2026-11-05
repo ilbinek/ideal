@@ -1,6 +1,7 @@
 import type {
   AppUser,
   ArmaBranch,
+  AutomationSettings,
   CdlcCatalog,
   CPUTopology,
   Downloader,
@@ -15,6 +16,10 @@ import type {
   Modset,
   ProfileFileEntry,
   QueueSnapshot,
+  RConStatus,
+  ServerAutomation,
+  ServerAutomationSettings,
+  ServerEvent,
   ServerKeysResponse,
   ServerMod,
   ServerStatusSnapshot,
@@ -298,6 +303,28 @@ export const api = {
     request<{ ok: boolean }>(`/api/servers/${id}/restart`, { method: "POST" }),
   forceStopServer: (id: number) =>
     request<{ ok: boolean }>(`/api/servers/${id}/force-stop`, { method: "POST" }),
+  getServerAutomation: (id: number) =>
+    request<ServerAutomation>(`/api/servers/${id}/automation`),
+  saveServerAutomation: (id: number, settings: ServerAutomationSettings) =>
+    request<ServerAutomation>(`/api/servers/${id}/automation`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  generateRCon: (id: number) =>
+    request<{ status: RConStatus; requiresRestart: boolean }>(
+      `/api/servers/${id}/automation/rcon/generate`,
+      { method: "POST" },
+    ),
+  getServerEvents: (id: number, limit: number, before?: number) =>
+    request<ServerEvent[]>(
+      `/api/servers/${id}/events?limit=${limit}${before ? `&before=${before}` : ""}`,
+    ),
+  getAutomationSettings: () => request<AutomationSettings>("/api/settings/automation"),
+  saveAutomationSettings: (settings: AutomationSettings) =>
+    request<AutomationSettings>("/api/settings/automation", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
   getServerStatus: (id: number) =>
     request<ServerStatusSnapshot>(`/api/servers/${id}/status`),
   getLaunchPreview: (id: number) =>
