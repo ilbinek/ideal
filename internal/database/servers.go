@@ -982,6 +982,14 @@ func DuplicateServer(srcID int, name, slug string, gamePort, steamPort int, mapK
 		SELECT user_id, ? FROM server_admins WHERE server_id = ?`, newID, srcID); err != nil {
 		return 0, err
 	}
+	// Carry over the schedule, but leave everything switched off: a copy is usually
+	// for testing, and shouldn't start or restart itself until someone says so. Its
+	// runtime state starts clean, since none of the source's history applies to it.
+	if _, err := tx.Exec(`
+		INSERT INTO server_automation (server_id, warn_minutes, restart_slots)
+		SELECT ?, warn_minutes, restart_slots FROM server_automation WHERE server_id = ?`, newID, srcID); err != nil {
+		return 0, err
+	}
 
 	rows, err := tx.Query(`SELECT filename, source_path FROM server_keys WHERE server_id = ? ORDER BY id`, srcID)
 	if err != nil {

@@ -103,6 +103,16 @@ func TestDuplicateServerEndToEnd(t *testing.T) {
 	if err := database.UpdateServerMemoryLimitMB(srcID, 4096); err != nil {
 		t.Fatal(err)
 	}
+	slots := []database.RestartSlot{{Minute: 360, Days: 127}}
+	if err := database.SaveServerAutomation(srcID, true, true, true, []int{10, 2}, slots, 555); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetCrashState(srcID, []int64{1, 2}, database.OwedCrash, 99); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RecordManualStop(srcID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.SyncHeadlessSlots(srcID, 2, "Main", "main"); err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +172,19 @@ func TestDuplicateServerEndToEnd(t *testing.T) {
 	if dup.Name != "Main test" || dup.Status != database.ServerStatusStopped || dup.ExtraLaunchParams != "-limitFPS=60" ||
 		dup.MemoryLimitMB != 4096 || dup.HeadlessCount != 2 || len(dup.EnabledCdlcs) != 1 || dup.EnabledCdlcs[0] != "gm" {
 		t.Fatalf("server row: %+v", dup)
+	}
+	auto, err := database.GetServerAutomation(int(res.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auto.Autostart || auto.RestartOnCrash || auto.ScheduleEnabled {
+		t.Fatalf("a copy must not start or restart itself: %+v", auto)
+	}
+	if len(auto.RestartSlots) != 1 || auto.RestartSlots[0].Minute != 360 || len(auto.WarnMinutes) != 2 || auto.WarnMinutes[0] != 10 {
+		t.Fatalf("schedule should be copied: %+v", auto)
+	}
+	if auto.UserStopped || auto.OwedStart != database.OwedNone || auto.GaveUpAt != 0 || len(auto.CrashHistory) != 0 || auto.LastSlotUnix != 0 {
+		t.Fatalf("runtime state should start clean: %+v", auto)
 	}
 	hcs, _ := database.GetHeadlessClients(int(res.ID))
 	if len(hcs) != 2 || !strings.HasPrefix(hcs[0].ProfileName, "Maintest-HC") {

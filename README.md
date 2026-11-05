@@ -16,6 +16,7 @@ The frontend was built quickly for functionality over polish. Contributions that
 
 - **Branches** — install Arma 3 dedicated server builds (built-in gosteam by default, or SteamCMD)
 - **Servers** — create instances, assign mods, edit config/profiles, upload missions, start/stop/restart, live logs
+- **Automation** — start servers when Ideal launches, restart them after unexpected exits, and restart them on a schedule with player warnings
 - **Docker isolation (Linux)** — optional global setting to run each server in a local Docker container with host networking and Docker-enforced CPU/RAM limits
 - **Mods** — download from Steam Workshop (built-in gosteam, DepotDownloader, or SteamCMD), update checks, download queue
 - **Modsets** — import Arma 3 Launcher HTML presets
@@ -181,14 +182,36 @@ Steam credentials, downloader choice, and related options live in the SQLite dat
 1. Open **Servers** → create a server (pick a branch, ports, optional modset)
 2. On the server detail page, assign client/server mods, edit config, upload missions as needed
 3. Click **Start** — Ideal provisions the instance (`servers/<slug>/`), copies keys, and launches the process (or a Docker container when Server isolation is enabled on Linux)
-4. Use **Stop** / **Restart** from the UI; live status updates over SSE
+4. Use **Stop** / **Restart** from the UI; live status updates over SSE. Both shut down gracefully (see [Automation](#automation)); **Force stop** appears while a server is stopping and kills it right away
 5. **Logs** tab tails session output and RPT files
 
 Default ports per server: game `2302`, Steam query `2303` (Steam defaults to game port + 1 if omitted).
 
-**Duplicate** (server header, full admins) makes an independent copy under a new name — e.g. to test new addons without touching the live setup. It copies all settings, the mod list (incl. server-only / optional flags), custom keys, server admins, headless clients, `server.cfg`/`basic.cfg`, profiles and missions. Ports are shifted by the next free multiple of 100 (e.g. `2302` → `2402`, BattlEye `RConPort` likewise) and the copy's `server.cfg` hostname is set to the new name. Logs, crash dumps, caches and generated folders (`mods/`, `keys/`, …) are not copied; they are rebuilt on provision.
+**Duplicate** (server header, full admins) makes an independent copy under a new name — e.g. to test new addons without touching the live setup. It copies all settings (automation toggles start switched off, though the schedule is kept, so a copy doesn't start or restart itself), the mod list (incl. server-only / optional flags), custom keys, server admins, headless clients, `server.cfg`/`basic.cfg`, profiles and missions. Ports are shifted by the next free multiple of 100 (e.g. `2302` → `2402`, BattlEye `RConPort` likewise) and the copy's `server.cfg` hostname is set to the new name. Logs, crash dumps, caches and generated folders (`mods/`, `keys/`, …) are not copied; they are rebuilt on provision.
 
-After Ideal restarts, transitional statuses are reconciled (e.g. a stuck `stopping` after a reboot becomes `stopped` when the process is gone).
+After Ideal restarts, transitional statuses are reconciled (e.g. a stuck `stopping` after a reboot becomes `stopped` when the process is gone). Servers still running are picked back up, once Ideal has checked that the recorded process really is that server and not something else that reused its PID.
+
+### Automation
+
+Each server's **Automation** tab has three independent settings. Server admins can change them; a full admin can **Pause all automation** in Settings for maintenance, which also cancels anything pending, with no catch-up afterwards.
+
+| Setting | What it does |
+|---------|--------------|
+| **Start when Ideal launches** | Starts the server whenever Ideal starts, one server at a time after a short delay (both set in Settings). This is what brings a server back after a power loss, provided Ideal itself gets started. |
+| **Restart if it exits unexpectedly** | Restarts after any exit not requested through Ideal, including `#shutdown` typed in-game. Waits 10s, 30s, 1m, then 5m between tries, and stops trying after 5 failures in 15 minutes. With this off, Ideal never restarts the server by itself. |
+| **Restart on a schedule** | Restarts at set times and weekdays. Never starts a stopped server, and skips one started under 10 minutes earlier or a time Ideal wasn't running for. Times are entered in your browser's timezone and stored in UTC, so they move by an hour locally when daylight saving starts or ends. |
+
+**Stopping a server on purpose keeps it off**, including across Ideal restarts, until someone starts it again. The same goes for a server Ideal gave up on.
+
+Automatic starts use the newest downloaded mods and branch files, just like a manual restart, and the server's **History** notes when that changed anything. History also records starts, stops, exits and skipped restarts. If a Discord webhook is set, you're told about unexpected exits, giving up, and failed launch or planned starts.
+
+Ideal only notices a server has gone when its process exits, so a frozen server isn't restarted.
+
+**Graceful shutdown.** Stop, Restart and planned restarts try each of these in turn, moving on if the server is still up:
+
+1. **BattlEye RCON** `#shutdown`, waiting up to 45s. This needs BattlEye on and RCON set up: the Automation tab reads the password and port from the server's BattlEye config, and **Generate RCON settings** adds any that are missing without changing existing values. Generated settings take effect the next time the server starts. RCON is also what lets players be warned before a planned restart, using the offsets you set; without it they get no warning.
+2. **Asking the OS to close it**, waiting up to 30s: closing its window on Windows, or a signal on Linux and Docker.
+3. **A hard kill**.
 
 ### 3. Mods and modsets
 
