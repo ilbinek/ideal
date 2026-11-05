@@ -41,11 +41,7 @@ func stopProcess(pid int) error {
 	}
 	// Kill the whole tree — Arma can leave children holding game ports.
 	_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
-
-	proc, err := os.FindProcess(pid)
-	if err == nil {
-		_ = proc.Kill()
-	}
+	terminatePID(pid)
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -55,9 +51,7 @@ func stopProcess(pid int) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
-	if proc != nil {
-		_ = proc.Kill()
-	}
+	terminatePID(pid)
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if !processRunning(pid) {
@@ -71,17 +65,39 @@ func stopProcess(pid int) error {
 	return nil
 }
 
+// terminatePID kills pid without keeping a handle open afterwards. An open handle
+// keeps a dead process's kernel object alive, which would make it look running.
+func terminatePID(pid int) {
+	h, err := syscall.OpenProcess(syscall.PROCESS_TERMINATE, false, uint32(pid))
+	if err != nil {
+		return
+	}
+	defer syscall.CloseHandle(h)
+	_ = syscall.TerminateProcess(h, 1)
+}
+
+// osFindProcess reports whether pid is a live process. OpenProcess alone isn't
+// enough: it succeeds on an exited process while anyone still holds a handle, so
+// this also checks whether the process object has been signalled.
+//
+// A process we aren't allowed to open reports as not running. Arma started by
+// Ideal is always openable, and a protected system process that reused a stale
+// PID must not block a server from starting.
 func osFindProcess(pid int) (bool, error) {
 	if pid <= 0 {
 		return false, nil
 	}
 	const processQueryLimited = 0x1000
-	h, err := syscall.OpenProcess(processQueryLimited, false, uint32(pid))
+	h, err := syscall.OpenProcess(processQueryLimited|syscall.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {
 		return false, err
 	}
-	_ = syscall.CloseHandle(h)
-	return true, nil
+	defer syscall.CloseHandle(h)
+	event, err := syscall.WaitForSingleObject(h, 0)
+	if err != nil {
+		return false, err
+	}
+	return event == syscall.WAIT_TIMEOUT, nil
 }
 
 func processIsZombie(pid int) bool {

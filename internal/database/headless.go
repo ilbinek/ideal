@@ -15,6 +15,7 @@ type HeadlessClient struct {
 	ProfileName string `json:"profileName"`
 	Status      string `json:"status"`
 	PID         int    `json:"pid"`
+	PIDCreateMs int64  `json:"-"` // start time of PID, proves it wasn't reused
 	ActiveRPT   string `json:"activeRpt"`
 }
 
@@ -37,6 +38,10 @@ func migrateHeadless() error {
 		if _, err := db.Exec(stmt); err != nil {
 			return err
 		}
+	}
+	const addIdentity = "ALTER TABLE server_headless_clients ADD COLUMN pid_create_ms INTEGER NOT NULL DEFAULT 0"
+	if _, err := db.Exec(addIdentity); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
 	}
 	return nil
 }
@@ -86,7 +91,7 @@ func SetServerHeadlessCount(serverID, count int) error {
 
 func GetHeadlessClients(serverID int) ([]HeadlessClient, error) {
 	rows, err := db.Query(`
-		SELECT id, server_id, slot, profile_name, status, pid, COALESCE(active_rpt, '')
+		SELECT id, server_id, slot, profile_name, status, pid, COALESCE(pid_create_ms, 0), COALESCE(active_rpt, '')
 		FROM server_headless_clients
 		WHERE server_id = ?
 		ORDER BY slot`, serverID)
@@ -98,7 +103,7 @@ func GetHeadlessClients(serverID int) ([]HeadlessClient, error) {
 	var clients []HeadlessClient
 	for rows.Next() {
 		var c HeadlessClient
-		if err := rows.Scan(&c.ID, &c.ServerID, &c.Slot, &c.ProfileName, &c.Status, &c.PID, &c.ActiveRPT); err != nil {
+		if err := rows.Scan(&c.ID, &c.ServerID, &c.Slot, &c.ProfileName, &c.Status, &c.PID, &c.PIDCreateMs, &c.ActiveRPT); err != nil {
 			return nil, err
 		}
 		clients = append(clients, c)
@@ -109,10 +114,10 @@ func GetHeadlessClients(serverID int) ([]HeadlessClient, error) {
 func GetHeadlessClient(serverID, slot int) (*HeadlessClient, error) {
 	var c HeadlessClient
 	err := db.QueryRow(`
-		SELECT id, server_id, slot, profile_name, status, pid, COALESCE(active_rpt, '')
+		SELECT id, server_id, slot, profile_name, status, pid, COALESCE(pid_create_ms, 0), COALESCE(active_rpt, '')
 		FROM server_headless_clients
 		WHERE server_id = ? AND slot = ?`, serverID, slot).
-		Scan(&c.ID, &c.ServerID, &c.Slot, &c.ProfileName, &c.Status, &c.PID, &c.ActiveRPT)
+		Scan(&c.ID, &c.ServerID, &c.Slot, &c.ProfileName, &c.Status, &c.PID, &c.PIDCreateMs, &c.ActiveRPT)
 	if err != nil {
 		return nil, err
 	}
@@ -122,9 +127,21 @@ func GetHeadlessClient(serverID, slot int) (*HeadlessClient, error) {
 func UpdateHeadlessStatus(serverID, slot int, status string, pid int, activeRPT string) error {
 	_, err := db.Exec(`
 		UPDATE server_headless_clients
-		SET status = ?, pid = ?, active_rpt = ?
+		SET status = ?, pid = ?, active_rpt = ?,
+			pid_create_ms = CASE WHEN ? = 0 THEN 0 ELSE pid_create_ms END
 		WHERE server_id = ? AND slot = ?`,
-		status, pid, activeRPT, serverID, slot,
+		status, pid, activeRPT, pid, serverID, slot,
+	)
+	return err
+}
+
+// UpdateHeadlessProcess records a launched or adopted HC with its start time.
+func UpdateHeadlessProcess(serverID, slot int, status string, pid int, createMs int64, activeRPT string) error {
+	_, err := db.Exec(`
+		UPDATE server_headless_clients
+		SET status = ?, pid = ?, pid_create_ms = ?, active_rpt = ?
+		WHERE server_id = ? AND slot = ?`,
+		status, pid, createMs, activeRPT, serverID, slot,
 	)
 	return err
 }
@@ -209,7 +226,7 @@ func RefreshHeadlessProfileNames(serverID int, serverName, slug string) error {
 
 func GetAllHeadlessClients() ([]HeadlessClient, error) {
 	rows, err := db.Query(`
-		SELECT id, server_id, slot, profile_name, status, pid, COALESCE(active_rpt, '')
+		SELECT id, server_id, slot, profile_name, status, pid, COALESCE(pid_create_ms, 0), COALESCE(active_rpt, '')
 		FROM server_headless_clients
 		ORDER BY server_id, slot`)
 	if err != nil {
@@ -220,7 +237,7 @@ func GetAllHeadlessClients() ([]HeadlessClient, error) {
 	var clients []HeadlessClient
 	for rows.Next() {
 		var c HeadlessClient
-		if err := rows.Scan(&c.ID, &c.ServerID, &c.Slot, &c.ProfileName, &c.Status, &c.PID, &c.ActiveRPT); err != nil {
+		if err := rows.Scan(&c.ID, &c.ServerID, &c.Slot, &c.ProfileName, &c.Status, &c.PID, &c.PIDCreateMs, &c.ActiveRPT); err != nil {
 			return nil, err
 		}
 		clients = append(clients, c)

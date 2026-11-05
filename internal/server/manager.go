@@ -87,8 +87,23 @@ func ReconcileStatuses() {
 		log.Printf("[SERVER] failed to reconcile statuses: %v", err)
 		return
 	}
-	for _, s := range servers {
-		alive := ServerAlive(s.PID, s.GamePort) || dockerContainerRunning(s.ID)
+	for i := range servers {
+		s := servers[i]
+		dockerUp := dockerContainerRunning(s.ID)
+		identity := identifyServerPID(&s)
+		alive := dockerUp || identity == identityMatch || IsPortInUse(s.GamePort)
+		if !dockerUp && identity == identityUnknown {
+			// A live process we can't inspect: don't adopt it, don't kill it, and
+			// don't call it stopped. Stop explains, and a later run re-checks.
+			log.Printf("[SERVER] cannot verify pid=%d for server %d (%s); leaving it alone", s.PID, s.ID, s.Slug)
+			if s.Status != database.ServerStatusStopped {
+				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
+			}
+			continue
+		}
+		if identity == identityMismatch {
+			log.Printf("[SERVER] pid=%d for server %d (%s) now belongs to another process", s.PID, s.ID, s.Slug)
+		}
 		switch s.Status {
 		case database.ServerStatusRunning, database.ServerStatusStarting:
 			if !alive {
@@ -98,16 +113,16 @@ func ReconcileStatuses() {
 				}
 			}
 		case database.ServerStatusStopping:
-			if alive && dockerContainerRunning(s.ID) {
+			if dockerUp {
 				_ = stopDockerContainer(s.ID, latestSessionLogPath(s.Slug))
-			} else if alive && s.PID > 0 && processRunning(s.PID) {
-				if err := stopProcess(s.PID); err != nil && ServerAlive(s.PID, s.GamePort) {
+			} else if identity == identityMatch {
+				if err := stopProcess(s.PID); err != nil && processRunning(s.PID) {
 					// Kill failed and process still up — unknown so Start/Stop stay usable.
 					_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
 					continue
 				}
 			}
-			if ServerAlive(s.PID, s.GamePort) || dockerContainerRunning(s.ID) {
+			if identifyServerPID(&s) == identityMatch || IsPortInUse(s.GamePort) || dockerContainerRunning(s.ID) {
 				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
 				continue
 			}
@@ -141,7 +156,8 @@ func (m *Manager) adoptOrphans() {
 		id  int
 		gen uint64
 	}
-	for _, s := range servers {
+	for i := range servers {
+		s := servers[i]
 		if _, ok := m.instances[s.ID]; ok {
 			continue
 		}
@@ -162,9 +178,13 @@ func (m *Manager) adoptOrphans() {
 			proc = dproc
 			dockerMode = true
 			containerID = cid
-		} else if s.PID > 0 && processRunning(s.PID) {
+		} else if identifyServerPID(&s) == identityMatch {
 			pid = s.PID
 			proc = adoptProcess(s.PID)
+			// Backfill rows from before start times were recorded, or after a clock step.
+			if ms := captureCreateMs(pid); ms > 0 && ms != s.PIDCreateMs {
+				_ = database.UpdateServerProcess(s.ID, s.Status, pid, ms, s.ActiveRPT)
+			}
 		} else {
 			continue
 		}
@@ -224,6 +244,15 @@ func (m *Manager) adoptOrphans() {
 			parentDocker = inst.dockerMode
 		} else if dockerContainerRunning(c.ServerID) {
 			parentDocker = true
+		}
+		if !parentDocker {
+			// Docker exec PIDs may be namespace-local, so only native HCs can be checked.
+			if identifyHeadlessPID(&c) != identityMatch {
+				continue
+			}
+			if ms := captureCreateMs(c.PID); ms > 0 && ms != c.PIDCreateMs {
+				_ = database.UpdateHeadlessProcess(c.ServerID, c.Slot, c.Status, c.PID, ms, c.ActiveRPT)
+			}
 		}
 		gen := atomic.AddUint64(&nextInstanceGen, 1)
 		m.headless[key] = &runningHeadless{
@@ -499,6 +528,14 @@ func (m *Manager) Start(serverID int) error {
 		return startErr
 	}
 
+	// Persist the PID right away: if Ideal dies during the verify window below,
+	// the next run can still find and adopt this process.
+	createMs := int64(0)
+	if !useDocker {
+		createMs = captureCreateMs(proc.pid)
+	}
+	_ = database.UpdateServerProcess(serverID, database.ServerStatusStarting, proc.pid, createMs, "")
+
 	if !useDocker {
 		if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
 			log.Printf("[SERVER] affinity warning for %d: %v", serverID, err)
@@ -708,9 +745,16 @@ func (m *Manager) stopOrphan(serverID int) error {
 	}
 	if _, _, running, _ := findDockerContainer(serverID); running || dockerContainerRunning(serverID) {
 		_ = stopDockerContainer(serverID, latestSessionLogPath(srv.Slug))
-	} else if srv.PID > 0 && processRunning(srv.PID) {
-		if err := stopProcess(srv.PID); err != nil && ServerAlive(srv.PID, srv.GamePort) {
-			return err
+	} else {
+		switch identifyServerPID(srv) {
+		case identityMatch:
+			if err := stopProcess(srv.PID); err != nil && processRunning(srv.PID) {
+				return err
+			}
+		case identityUnknown:
+			return fmt.Errorf("cannot verify that process %d belongs to this server, so it was not stopped", srv.PID)
+		case identityMismatch:
+			log.Printf("[SERVER] not stopping pid=%d: it no longer belongs to server %d", srv.PID, serverID)
 		}
 	}
 	_ = waitForPortsFree(srv.GamePort, srv.SteamPort, 15*time.Second)

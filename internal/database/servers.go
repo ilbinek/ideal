@@ -56,6 +56,7 @@ type Server struct {
 	MemoryLimitMB     int       `json:"memoryLimitMB"` // 0 = unlimited; shared by dedicated + headless
 	Status            string    `json:"status"`
 	PID               int       `json:"pid"`
+	PIDCreateMs       int64     `json:"-"` // start time of PID, proves it wasn't reused
 	ActiveRPT         string    `json:"activeRpt"`
 	CreatedAt         time.Time `json:"createdAt"`
 	UpdatedAt         time.Time `json:"updatedAt"`
@@ -178,6 +179,7 @@ func migrateServerColumns() error {
 		"ALTER TABLE arma_branches ADD COLUMN last_notified_build_id TEXT DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN cpu_affinity TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE servers ADD COLUMN memory_limit_mb INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE servers ADD COLUMN pid_create_ms INTEGER NOT NULL DEFAULT 0",
 	}
 	for _, stmt := range alters {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -539,7 +541,7 @@ const serverSelectCols = `
 		COALESCE(sort_order, 0),
 		COALESCE(cpu_affinity, ''),
 		COALESCE(memory_limit_mb, 0),
-		status, pid, COALESCE(active_rpt, ''), created_at, updated_at`
+		status, pid, COALESCE(pid_create_ms, 0), COALESCE(active_rpt, ''), created_at, updated_at`
 
 func GetServers() ([]Server, error) {
 	rows, err := db.Query(`SELECT ` + serverSelectCols + ` FROM servers ORDER BY sort_order, name COLLATE NOCASE, id`)
@@ -600,7 +602,7 @@ func scanServers(rows *sql.Rows) ([]Server, error) {
 			&s.ID, &s.Name, &s.Slug, &s.BranchID, &modsetID, &s.GamePort, &s.SteamPort,
 			&s.ProfileName, &s.ServerBinary, &s.ExtraLaunchParams, &enabledCdlcs, &s.HeadlessCount,
 			&missionHttpServe, &s.SortOrder, &s.CPUAffinity, &s.MemoryLimitMB,
-			&s.Status, &s.PID, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
+			&s.Status, &s.PID, &s.PIDCreateMs, &s.ActiveRPT, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -771,8 +773,19 @@ func UpdateServerMemoryLimitMB(id int, memoryLimitMB int) error {
 
 func UpdateServerStatus(id int, status string, pid int, activeRPT string) error {
 	_, err := db.Exec(`
-		UPDATE servers SET status = ?, pid = ?, active_rpt = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?`, status, pid, activeRPT, id)
+		UPDATE servers SET status = ?, pid = ?, active_rpt = ?,
+			pid_create_ms = CASE WHEN ? = 0 THEN 0 ELSE pid_create_ms END,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`, status, pid, activeRPT, pid, id)
+	return err
+}
+
+// UpdateServerProcess records a newly launched or adopted process together with
+// its start time, so a later run can tell it apart from a reused PID.
+func UpdateServerProcess(id int, status string, pid int, createMs int64, activeRPT string) error {
+	_, err := db.Exec(`
+		UPDATE servers SET status = ?, pid = ?, pid_create_ms = ?, active_rpt = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`, status, pid, createMs, activeRPT, id)
 	return err
 }
 

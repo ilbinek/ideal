@@ -254,6 +254,12 @@ func (m *Manager) StartHeadless(serverID, slot int) error {
 		return startErr
 	}
 
+	if parentDocker {
+		_ = database.UpdateHeadlessStatus(serverID, slot, database.ServerStatusStarting, pid, "")
+	} else {
+		_ = database.UpdateHeadlessProcess(serverID, slot, database.ServerStatusStarting, pid, captureCreateMs(pid), "")
+	}
+
 	if !parentDocker {
 		if err := ApplyServerAffinity(proc.pid, srv.CPUAffinity); err != nil {
 			log.Printf("[HC] affinity warning for server %d slot %d: %v", serverID, slot, err)
@@ -398,9 +404,14 @@ func (m *Manager) stopHeadlessOrphan(serverID, slot int) error {
 	if hc.PID > 0 {
 		if dockerContainerRunning(serverID) {
 			_ = stopDockerHeadless(serverID, hc.PID)
-		} else if processRunning(hc.PID) {
-			if err := stopProcess(hc.PID); err != nil && processRunning(hc.PID) {
-				return err
+		} else {
+			switch identifyHeadlessPID(hc) {
+			case identityMatch:
+				if err := stopProcess(hc.PID); err != nil && processRunning(hc.PID) {
+					return err
+				}
+			case identityUnknown:
+				return fmt.Errorf("cannot verify that process %d belongs to this headless client, so it was not stopped", hc.PID)
 			}
 		}
 	}
@@ -563,8 +574,13 @@ func ReconcileHeadlessStatuses() {
 		log.Printf("[HC] failed to reconcile statuses: %v", err)
 		return
 	}
-	for _, c := range clients {
+	for i := range clients {
+		c := clients[i]
 		alive := c.PID > 0 && processRunning(c.PID)
+		if alive && !dockerContainerRunning(c.ServerID) && identifyHeadlessPID(&c) != identityMatch {
+			// The PID was reused, or can't be inspected: never adopt or kill it.
+			alive = false
+		}
 		switch c.Status {
 		case database.ServerStatusRunning, database.ServerStatusStarting:
 			if !alive {
