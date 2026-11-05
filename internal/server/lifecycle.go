@@ -211,6 +211,11 @@ func (m *Manager) launchServer(ctx context.Context, serverID int) (*launchedServ
 		return nil, err
 	}
 
+	// A crash can leave only BattlEye's active copy of its config behind.
+	if err := restoreBEConfig(srv); err != nil {
+		log.Printf("[SERVER] could not restore BattlEye config for %d: %v", serverID, err)
+	}
+
 	// Last chance to back out before anything is spawned.
 	if err := ctx.Err(); err != nil {
 		_, _ = database.ClearServerPins(serverID)
