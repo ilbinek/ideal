@@ -26,6 +26,7 @@ type serverOps interface {
 	StartSystem(serverID int, guard func() error) error
 	RestartPlanned(serverID int, guard func() error) (attempted bool, err error)
 	Running(serverID int) (running bool, startedAt time.Time)
+	CurrentOp(serverID int) server.OpKind
 	SendRConMessage(serverID int, message string) error
 }
 
@@ -54,6 +55,7 @@ type actionResult struct {
 
 type warningResult struct {
 	serverID int
+	minutes  int
 	err      error
 }
 
@@ -405,6 +407,10 @@ func (c *Coordinator) onResult(r actionResult) {
 	a, paused, err := currentIntent(r.serverID)
 	if err != nil {
 		log.Printf("[AUTOMATION] handling result for server %d: %v", r.serverID, err)
+		return
+	}
+
+	if c.onPlannedStopHalf(r, a) {
 		return
 	}
 

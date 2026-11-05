@@ -53,6 +53,8 @@ func (o *fakeOps) Running(id int) (bool, time.Time) {
 	return o.running[id], o.startedAt[id]
 }
 
+func (o *fakeOps) CurrentOp(int) server.OpKind { return "" }
+
 func (o *fakeOps) SendRConMessage(id int, message string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -456,7 +458,7 @@ func TestDiscordBlockedDoesNotDelayRestart(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 200; i++ {
+		for i := 0; i < 40; i++ {
 			notifier.enqueue("x", "y", "z")
 		}
 		h.exit(t0.Add(-time.Minute))

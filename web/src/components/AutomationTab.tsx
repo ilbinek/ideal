@@ -1,8 +1,18 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Loader2 } from "lucide-react";
+import { KeyRound, Loader2, Plus, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { RestartSlot, ServerEvent } from "@/lib/types";
+import {
+  ALL_DAYS,
+  currentUtcOffset,
+  formatMinute,
+  localToSlot,
+  parseMinute,
+  parseWarnMinutes,
+  slotToLocal,
+  type LocalSlot,
+} from "@/lib/schedule";
+import type { ServerEvent } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,7 +22,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
+
+const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Monday first, while bit positions stay Sunday-based.
+const dayOrder = [1, 2, 3, 4, 5, 6, 0];
 
 const eventLabels: Record<string, string> = {
   started: "Started",
@@ -120,6 +136,52 @@ function EventHistory({ serverId }: { serverId: number }) {
   );
 }
 
+function ScheduleRow({
+  slot,
+  onChange,
+  onRemove,
+}: {
+  slot: LocalSlot;
+  onChange: (slot: LocalSlot) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Input
+        type="time"
+        aria-label="Restart time"
+        className="w-28"
+        value={formatMinute(slot.minute)}
+        onChange={(e) => {
+          const minute = parseMinute(e.target.value);
+          if (minute !== null) onChange({ ...slot, minute });
+        }}
+      />
+      <div className="flex flex-wrap gap-1">
+        {dayOrder.map((day) => {
+          const on = (slot.days & (1 << day)) !== 0;
+          return (
+            <Button
+              key={day}
+              type="button"
+              size="sm"
+              variant={on ? "default" : "outline"}
+              aria-pressed={on}
+              className="px-2"
+              onClick={() => onChange({ ...slot, days: slot.days ^ (1 << day) })}
+            >
+              {dayNames[day]}
+            </Button>
+          );
+        })}
+      </div>
+      <Button type="button" size="sm" variant="ghost" aria-label="Remove this time" onClick={onRemove}>
+        <Trash2 className="size-3.5" />
+      </Button>
+    </div>
+  );
+}
+
 function RConCard({ serverId }: { serverId: number }) {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -202,28 +264,47 @@ export function AutomationTab({ serverId }: { serverId: number }) {
   const [autostart, setAutostart] = useState(false);
   const [restartOnCrash, setRestartOnCrash] = useState(false);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
-  const [warnMinutes, setWarnMinutes] = useState<number[]>([]);
-  const [slots, setSlots] = useState<RestartSlot[]>([]);
+  const [warnText, setWarnText] = useState("");
+  const [slots, setSlots] = useState<LocalSlot[]>([]);
 
+  // Only when the saved settings really changed: the RCON card refreshes this same
+  // query, and that mustn't throw away edits that haven't been saved yet.
+  const savedSettings = data
+    ? JSON.stringify([
+        data.autostart,
+        data.restartOnCrash,
+        data.scheduleEnabled,
+        data.warnMinutes,
+        data.restartSlots,
+      ])
+    : null;
   useEffect(() => {
     if (data) {
       setAutostart(data.autostart);
       setRestartOnCrash(data.restartOnCrash);
       setScheduleEnabled(data.scheduleEnabled);
-      setWarnMinutes(data.warnMinutes);
-      setSlots(data.restartSlots);
+      setWarnText(data.warnMinutes.join(", "));
+      const offset = currentUtcOffset();
+      setSlots(data.restartSlots.map((s) => slotToLocal(s, offset)));
     }
-  }, [data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedSettings]);
 
   const save = useMutation({
-    mutationFn: () =>
-      api.saveServerAutomation(serverId, {
+    mutationFn: () => {
+      const warnMinutes = parseWarnMinutes(warnText);
+      if (warnMinutes === null) {
+        return Promise.reject(new ApiError(400, "Warnings must be whole minutes, separated by commas"));
+      }
+      const offset = currentUtcOffset();
+      return api.saveServerAutomation(serverId, {
         autostart,
         restartOnCrash,
         scheduleEnabled,
         warnMinutes,
-        restartSlots: slots,
-      }),
+        restartSlots: slots.map((s) => localToSlot(s, offset)),
+      });
+    },
     onSuccess: (saved) => {
       toast.success("Automation saved");
       queryClient.setQueryData(["servers", serverId, "automation"], saved);
@@ -238,6 +319,8 @@ export function AutomationTab({ serverId }: { serverId: number }) {
       </div>
     );
   }
+
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   return (
     <div className="flex flex-col gap-6">
@@ -291,14 +374,76 @@ export function AutomationTab({ serverId }: { serverId: number }) {
               off until someone starts it.
             </p>
           )}
-          <div>
-            <Button type="button" disabled={save.isPending} onClick={() => save.mutate()}>
-              {save.isPending && <Loader2 className="size-4 animate-spin" />}
-              Save automation
-            </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Planned restarts</CardTitle>
+          <CardDescription>
+            Restarts this server at set times, in your browser's timezone ({timeZone}). A schedule never
+            starts a stopped server, and skips one started less than 10 minutes earlier.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4 text-sm">
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={scheduleEnabled}
+              onChange={(e) => setScheduleEnabled(e.target.checked)}
+            />
+            <span className="font-medium">Restart on a schedule</span>
+          </label>
+          <div className="flex flex-col gap-3">
+            {slots.map((slot, i) => (
+              <ScheduleRow
+                key={i}
+                slot={slot}
+                onChange={(next) => setSlots(slots.map((s, j) => (j === i ? next : s)))}
+                onRemove={() => setSlots(slots.filter((_, j) => j !== i))}
+              />
+            ))}
+            <div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  setSlots([
+                    ...slots,
+                    { minute: 360, days: slots.length > 0 ? slots[slots.length - 1].days : ALL_DAYS },
+                  ])
+                }
+              >
+                <Plus className="size-3.5" /> Add time
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Times are stored in UTC, so a time here moves by an hour when daylight saving starts or ends.
+          </p>
+          <div className="flex max-w-xs flex-col gap-2">
+            <Label htmlFor="auto-warn">Warn players (minutes before)</Label>
+            <Input
+              id="auto-warn"
+              placeholder="15, 5, 1"
+              value={warnText}
+              onChange={(e) => setWarnText(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Needs BattlEye RCON. Without it, the server restarts with no warning.
+            </p>
           </div>
         </CardContent>
       </Card>
+
+      <div>
+        <Button type="button" disabled={save.isPending} onClick={() => save.mutate()}>
+          {save.isPending && <Loader2 className="size-4 animate-spin" />}
+          Save automation
+        </Button>
+      </div>
 
       <RConCard serverId={serverId} />
       <EventHistory serverId={serverId} />

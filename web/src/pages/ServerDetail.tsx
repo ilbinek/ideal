@@ -249,6 +249,15 @@ function AutomationBadges({
           won't start on launch
         </Badge>
       ) : null}
+      {live.nextRestartAt && status === "running" && !live.paused ? (
+        <Badge variant="outline" title="Next planned restart">
+          restart {new Date(live.nextRestartAt * 1000).toLocaleString([], {
+            weekday: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </Badge>
+      ) : null}
       {live.paused ? (
         <Badge variant="outline" title="All automation is paused in Settings.">
           automation paused
