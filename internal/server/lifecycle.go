@@ -570,14 +570,6 @@ func (m *Manager) stopInner(op *serverOp, serverID int) error {
 	return nil
 }
 
-// terminateInstance ends the process behind an instance.
-func terminateInstance(_ context.Context, inst *runningInstance, _ *serverOp) error {
-	if inst.dockerMode {
-		return stopDockerContainer(inst.serverID, inst.sessionLogPath)
-	}
-	return stopProcess(inst.pid)
-}
-
 // stopOrphan clears status for a server not tracked in-memory (e.g. after restart).
 func (m *Manager) stopOrphan(serverID int) error {
 	srv, err := database.GetServer(serverID)

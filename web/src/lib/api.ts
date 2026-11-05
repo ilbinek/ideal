@@ -296,6 +296,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/servers/${id}/stop`, { method: "POST" }),
   restartServer: (id: number) =>
     request<{ ok: boolean }>(`/api/servers/${id}/restart`, { method: "POST" }),
+  forceStopServer: (id: number) =>
+    request<{ ok: boolean }>(`/api/servers/${id}/force-stop`, { method: "POST" }),
   getServerStatus: (id: number) =>
     request<ServerStatusSnapshot>(`/api/servers/${id}/status`),
   getLaunchPreview: (id: number) =>

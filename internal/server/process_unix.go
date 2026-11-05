@@ -58,6 +58,40 @@ func stopProcess(pid int) error {
 	return nil
 }
 
+// gracefulCloseSignal asks Arma to shut down. Reports suggest SIGINT is its clean
+// path and that SIGTERM ends it immediately, but this isn't documented, so check it
+// against a real server if shutdowns misbehave.
+const gracefulCloseSignal = syscall.SIGINT
+
+// closeProcess asks a server to exit, reporting whether the signal was delivered.
+func closeProcess(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if err := syscall.Kill(-pid, gracefulCloseSignal); err != nil {
+		return syscall.Kill(pid, gracefulCloseSignal) == nil
+	}
+	return true
+}
+
+// killProcess ends a process group immediately.
+func killProcess(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processRunning(pid) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("process %d did not exit after kill", pid)
+}
+
 func osFindProcess(pid int) (bool, error) {
 	if pid <= 0 {
 		return false, nil

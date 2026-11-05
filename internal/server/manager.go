@@ -86,9 +86,16 @@ var nextInstanceGen uint64
 // Init reconciles DB state on startup and re-adopts still-running processes
 // so metrics, watchers, and Stop keep working across Ideal restarts.
 func Init() {
-	ReconcileStatuses()
+	resumeStops := ReconcileStatuses()
 	ReconcileHeadlessStatuses()
 	Default.adoptOrphans()
+	for _, id := range resumeStops {
+		go func(id int) {
+			if err := Default.Stop(id, ActorSystem); err != nil {
+				log.Printf("[SERVER] resuming interrupted stop of server %d: %v", id, err)
+			}
+		}(id)
+	}
 	// Drop unused old generations after adopt so pins for live servers are kept.
 	contentver.GCAllOrphans()
 	// Check .pbo/.bisign/.bikey state for mods downloaded before this was tracked.
@@ -100,11 +107,11 @@ func Init() {
 // provably its own (holding its game port) is still alive; a port held by anything
 // else doesn't count. Transitional "stopping" is always recovered so a mid-stop
 // reboot cannot trap the UI.
-func ReconcileStatuses() {
+func ReconcileStatuses() (resumeStops []int) {
 	servers, err := database.GetServers()
 	if err != nil {
 		log.Printf("[SERVER] failed to reconcile statuses: %v", err)
-		return
+		return nil
 	}
 	for i := range servers {
 		s := servers[i]
@@ -147,17 +154,12 @@ func ReconcileStatuses() {
 				}
 			}
 		case database.ServerStatusStopping:
-			if dockerUp {
-				_ = stopDockerContainer(s.ID, latestSessionLogPath(s.Slug))
-			} else if identity == identityMatch {
-				if err := stopProcess(s.PID); err != nil && processRunning(s.PID) {
-					// Kill failed and process still up — unknown so Start/Stop stay usable.
-					_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
-					continue
-				}
-			}
-			if identifyServerPID(&s) == identityMatch || dockerContainerRunning(s.ID) {
-				_ = database.UpdateServerStatus(s.ID, database.ServerStatusUnknown, s.PID, s.ActiveRPT)
+			if alive {
+				// Finish it in the background, after adoption, so a graceful stop that can
+				// take over a minute doesn't hold up startup. Marked running so adoption
+				// picks it up.
+				_ = database.UpdateServerStatus(s.ID, database.ServerStatusRunning, s.PID, s.ActiveRPT)
+				resumeStops = append(resumeStops, s.ID)
 				continue
 			}
 			_ = database.UpdateServerStatus(s.ID, database.ServerStatusStopped, 0, s.ActiveRPT)
@@ -173,6 +175,7 @@ func ReconcileStatuses() {
 			}
 		}
 	}
+	return resumeStops
 }
 
 // adoptOrphans re-attaches Ideal to Arma / headless PIDs that survived a restart.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -427,13 +428,23 @@ func WaitForRPT(slug string, after time.Time, timeout time.Duration) (string, er
 	return "", fmt.Errorf("timed out waiting for RPT log")
 }
 
+// portProbeHost is the address port checks bind. Empty means every interface, which
+// is what production needs: Arma binds all interfaces, and a loopback-only probe can
+// succeed alongside it and miss the conflict. Tests set it to loopback, because a
+// freshly built test binary binding every interface triggers a firewall prompt.
+var portProbeHost = ""
+
+func portProbeAddr(port int) string {
+	return net.JoinHostPort(portProbeHost, strconv.Itoa(port))
+}
+
 // IsPortAvailable checks if a TCP port can be bound.
 func IsPortAvailable(port int) bool {
 	return isTCPPortAvailable(port) && isUDPPortAvailable(port)
 }
 
 func isTCPPortAvailable(port int) bool {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	ln, err := net.Listen("tcp", portProbeAddr(port))
 	if err != nil {
 		return false
 	}
@@ -442,7 +453,7 @@ func isTCPPortAvailable(port int) bool {
 }
 
 func isUDPPortAvailable(port int) bool {
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
+	addr, err := net.ResolveUDPAddr("udp", portProbeAddr(port))
 	if err != nil {
 		return false
 	}

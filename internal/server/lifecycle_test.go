@@ -443,7 +443,7 @@ func TestForeignPortHolderDoesNotKeepServerRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	// This test binary isn't an Arma server, so it stands in for the foreign holder.
-	holder, err := net.ListenUDP("udp", &net.UDPAddr{Port: srv.GamePort})
+	holder, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: srv.GamePort})
 	if err != nil {
 		t.Fatal(err)
 	}

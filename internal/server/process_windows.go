@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func startProcess(binary string, args []string, workDir string, capture io.Writer) (*managedProc, error) {
@@ -58,6 +61,48 @@ func stopProcess(pid int) error {
 		return fmt.Errorf("process %d did not exit after kill", pid)
 	}
 	return nil
+}
+
+// killProcess ends a process tree immediately.
+func killProcess(pid int) error {
+	return stopProcess(pid)
+}
+
+// closeWindowTarget carries the PID into the enum callback. Callbacks from
+// syscall.NewCallback are never freed, so there's one, using this shared state.
+var (
+	closeWindowMu     sync.Mutex
+	closeWindowPID    uint32
+	closeWindowPosted int
+
+	procPostMessageW = windows.NewLazySystemDLL("user32.dll").NewProc("PostMessageW")
+
+	closeWindowCallback = syscall.NewCallback(func(hwnd windows.HWND, _ uintptr) uintptr {
+		var owner uint32
+		if _, err := windows.GetWindowThreadProcessId(hwnd, &owner); err == nil && owner == closeWindowPID {
+			const wmClose = 0x0010
+			if ok, _, _ := procPostMessageW.Call(uintptr(hwnd), wmClose, 0, 0); ok != 0 {
+				closeWindowPosted++
+			}
+		}
+		return 1 // keep enumerating
+	})
+)
+
+// closeProcess asks a server to exit by closing its window, the same as clicking
+// its X. arma3server is a GUI program with no console, so console control events
+// don't apply, and sending one could hit Ideal's own console instead. It reports
+// false when there's no window to close, such as from another session.
+func closeProcess(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	closeWindowMu.Lock()
+	defer closeWindowMu.Unlock()
+	closeWindowPID = uint32(pid)
+	closeWindowPosted = 0
+	_ = windows.EnumWindows(closeWindowCallback, nil)
+	return closeWindowPosted > 0
 }
 
 // terminatePID kills pid without keeping a handle open afterwards. An open handle

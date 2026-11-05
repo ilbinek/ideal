@@ -329,9 +329,24 @@ func removeDockerContainer(name string) error {
 	return nil
 }
 
+// dockerStopSeconds is how long docker stop waits before killing the container.
+const dockerStopSeconds = 15
+
 func stopDockerContainer(serverID int, sessionLogPath string) error {
+	return stopDockerContainerAfter(serverID, sessionLogPath, dockerStopSeconds)
+}
+
+// signalDockerContainer asks the server inside a container to shut down.
+func signalDockerContainer(serverID int) bool {
+	_, err := dockerRun("kill", "-s", "INT", dockerContainerName(serverID))
+	return err == nil
+}
+
+// stopDockerContainerAfter stops the container, killing it after waitSeconds, then
+// saves its logs and removes it.
+func stopDockerContainerAfter(serverID int, sessionLogPath string, waitSeconds int) error {
 	name := dockerContainerName(serverID)
-	cmd := exec.Command("docker", "stop", "-t", "15", name)
+	cmd := exec.Command("docker", "stop", "-t", strconv.Itoa(waitSeconds), name)
 	var stderr bytes.Buffer
 	cmd.Stdout = io.Discard
 	cmd.Stderr = &stderr

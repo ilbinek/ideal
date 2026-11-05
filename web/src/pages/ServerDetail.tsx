@@ -238,6 +238,7 @@ export function ServerDetail() {
   const live = statusFor(serverId);
   const status = server.data?.status ?? live?.status ?? "stopped";
   const isRunning = status === "running" || status === "starting";
+  const isStopping = status === "stopping";
 
   const [actionError, setActionError] = useState("");
 
@@ -291,6 +292,23 @@ export function ServerDetail() {
     },
     onError: (err) => {
       setActionError(err instanceof Error ? err.message : "Restart failed");
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+  });
+  const forceStop = useMutation({
+    mutationFn: () => api.forceStopServer(serverId),
+    onMutate: () => {
+      setActionError("");
+    },
+    onSuccess: () => {
+      setActionError("");
+      patchServerStatus(queryClient, serverId, "stopped");
+      queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["servers"] });
+    },
+    onError: (err) => {
+      setActionError(err instanceof Error ? err.message : "Force stop failed");
       queryClient.invalidateQueries({ queryKey: ["servers", serverId] });
       queryClient.invalidateQueries({ queryKey: ["servers"] });
     },
@@ -356,18 +374,30 @@ export function ServerDetail() {
           {status}
         </Badge>
         <div className="flex gap-2">
-          <Button
-            size="sm"
-            disabled={start.isPending || stop.isPending || restart.isPending}
-            onClick={() => (isRunning ? stop.mutate() : start.mutate())}
-          >
-            {isRunning ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
-            {isRunning ? "Stop" : "Start"}
-          </Button>
+          {isStopping ? (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={forceStop.isPending}
+              title="Skip the graceful shutdown and kill the server now"
+              onClick={() => forceStop.mutate()}
+            >
+              <Square className="size-3.5" /> Force stop
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              disabled={start.isPending || stop.isPending || restart.isPending}
+              onClick={() => (isRunning ? stop.mutate() : start.mutate())}
+            >
+              {isRunning ? <Square className="size-3.5" /> : <Play className="size-3.5" />}
+              {isRunning ? "Stop" : "Start"}
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
-            disabled={restart.isPending || start.isPending || stop.isPending}
+            disabled={restart.isPending || start.isPending || stop.isPending || isStopping}
             onClick={() => restart.mutate()}
           >
             <RotateCcw className="size-3.5" /> Restart

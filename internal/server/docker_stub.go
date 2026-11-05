@@ -38,9 +38,17 @@ func execDockerHeadless(serverID int, binary string, args []string, workDir, ses
 	return 0, nil, fmt.Errorf("Docker isolation is only supported on Linux")
 }
 
+const dockerStopSeconds = 15
+
 func stopDockerContainer(serverID int, sessionLogPath string) error {
 	return fmt.Errorf("Docker isolation is only supported on Linux")
 }
+
+func stopDockerContainerAfter(serverID int, sessionLogPath string, waitSeconds int) error {
+	return fmt.Errorf("Docker isolation is only supported on Linux")
+}
+
+func signalDockerContainer(serverID int) bool { return false }
 
 func stopDockerHeadless(serverID, pid int) error {
 	return fmt.Errorf("Docker isolation is only supported on Linux")

@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -387,10 +386,5 @@ func pickRConPort(srv *database.Server) (int, error) {
 }
 
 func isUDPPortFreeOnHost(port int) bool {
-	c, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
+	return isUDPPortAvailable(port)
 }
